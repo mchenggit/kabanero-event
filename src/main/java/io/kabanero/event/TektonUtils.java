@@ -1,4 +1,5 @@
 package io.kabanero.event;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import io.kubernetes.client.ApiClient;
@@ -37,7 +38,7 @@ public class TektonUtils {
         "    \"kind\": \"PipelineResource\"," +
         "    \"metadata\": {" +
         "        \"name\": \"{{__NAME__}}\","+
-        "        \"namespace\": \"{{__NAMESPACE__}}\"," +
+        "        \"namespace\": \"{{__NAMESPACE__}}\"" +
         "    }," +
         "    \"spec\": {" +
         "        \"params\": ["+
@@ -52,15 +53,22 @@ public class TektonUtils {
 
     public static void createModifyDockerImagePipelineResource(ApiClient apiClient, String name,
          String namespace, String imageLocation) throws Exception {
+        logger.info("createModifyDockerImagePipelineResource name: {} namespace: {}, imageLocation: {}", name, namespace, imageLocation);
 
-
-        logger.info("createModifyDockerImagePipelineResource name: {} namespace: {}, imageLocation:", name, namespace, imageLocation);
-
-        String json = pipelineResourceImage.replace("{{__NAME__}}", name).
+        String group = KubeUtils.TEKTON_GROUP;
+        String version = KubeUtils.TEKTON_VERSION;
+        String plural  = KubeUtils.TEKTON_PIPELINE_RESOURCE_PLURAL;
+        Map resource = getExistingPipelineResource(apiClient, namespace, name);
+        if (resource == null ) {
+            // create it 
+            String jsonBody = pipelineResourceImage.replace("{{__NAME__}}", name).
                          replace("{{__NAMESPACE__}}", namespace).
                          replace("{{__IMAGE_LOCATION__}}", imageLocation);
-      
-       logger.info("json body: {}", json);
+            logger.info("createModifyDockerImagePiprlineResource Creating resource with json body: {}", jsonBody);
+            KubeUtils.createResource(apiClient, group, version, plural, namespace, jsonBody, name);
+        } else {
+            logger.info("createModifyDockerImagePipelineRessource: resource {}/{} alredy exists", namespace, name);
+        }
     }
 
 
@@ -70,7 +78,7 @@ public class TektonUtils {
     "    \"kind\": \"PipelineResource\","+
     "    \"metadata\": {"+
     "        \"name\": \"{{__NAME__}}\","+
-    "        \"namespace\": \"{{__NAMESPACE__}}\","+
+    "        \"namespace\": \"{{__NAMESPACE__}}\""+
     "    },"+
     "    \"spec\": {"+
     "        \"params\": ["+
@@ -80,7 +88,7 @@ public class TektonUtils {
     "            },"+
     "            {"+
     "                \"name\": \"url\","+
-    "                \"value\": \"{{__REPO__LOCATION__}}\""+
+    "                \"value\": \"{{__REPO_LOCATION__}}\""+
     "            }"+
     "        ],"+
     "        \"type\": \"git\""+
@@ -91,12 +99,21 @@ public class TektonUtils {
          String namespace, String branch, String repoLocation) throws Exception {
         logger.info("createModifyGitPipelineResource name: {} namespace: {}, branch: {}, repoLocation:{}", name, namespace, branch, repoLocation);
 
-        String json = pipelineResourceGit.replace("{{__NAME__}}", name).
+        String group = KubeUtils.TEKTON_GROUP;
+        String version = KubeUtils.TEKTON_VERSION;
+        String plural  = KubeUtils.TEKTON_PIPELINE_RESOURCE_PLURAL;
+        Map resource = getExistingPipelineResource(apiClient, namespace, name);
+        if (resource == null ) {
+
+            String jsonBody = pipelineResourceGit.replace("{{__NAME__}}", name).
                          replace("{{__NAMESPACE__}}", namespace).
                          replace("{{__BRANCH__}}", branch).
                          replace("{{__REPO_LOCATION__}}", repoLocation);
-      
-       logger.info("json body: {}", json);
+            logger.info("createModifyGitPiprlineResource Creating resource with json body: {}", jsonBody);
+            KubeUtils.createResource(apiClient, group, version, plural, namespace, jsonBody, name);
+        } else {
+            logger.info("createModifyGitPipelineRessource: resource {}/{} alredy exists", namespace, name);
+        }
     }
 
 
@@ -110,7 +127,7 @@ public class TektonUtils {
     "            \"tekton.dev/pipeline\": \"appsody-build-pipeline\""+
     "        },"+
     "        \"name\": \"{{__NAME__}}\","+
-    "        \"namespace\": \"{{__NAMESPACE__}}\","+
+    "        \"namespace\": \"{{__NAMESPACE__}}\""+
     "    },"+
     "    \"spec\": {"+
     "        \"pipelineRef\": {"+
@@ -143,7 +160,18 @@ public class TektonUtils {
          String timeout, String triggerType) throws Exception {
         logger.info("runPipeline name: {} namespace: {}, pipelineRef: {}, gitResourceRef:{}, dockerImageRef: {}, serviceAccount: {}, timeout: {}, triggerType: {}", name, namespace, pipelineRef, gitResourceRef, dockerImageRef, serviceAccount, timeout, triggerType);
     
-        String json = pipelineRun.replace("{{__NAME__}}", name).
+       
+        String group = KubeUtils.TEKTON_GROUP;
+        String version = KubeUtils.TEKTON_VERSION;
+        String plural = KubeUtils.TEKTON_PIPELINE_RUN_PLURAL;
+        Map map = getExistingPipelineRun(apiClient, namespace, name);
+        if ( map != null ) {
+            // delete the run
+            logger.info("runPipeline  deleting existing run: {}/{}", namespace, name);
+            KubeUtils.deleteKubeResource(apiClient, namespace, name, group, version, plural);
+        }
+
+        String jsonBody = pipelineRun.replace("{{__NAME__}}", name).
                       replace("{{__NAMESPACE__}}", namespace).
                       replace("{{__PIPELINE_REF__}}", pipelineRef).
                       replace("{{__GIT_RESOURCE_REF__}}", gitResourceRef).
@@ -152,7 +180,49 @@ public class TektonUtils {
                       replace("{{__TIMEOUT__}}", timeout).
                       replace("{{__TRIGGER_TYPE__}}", triggerType);
 
-       logger.info("json: {}", json);
+        logger.info("runPiepeline creating resource with json body: {}", jsonBody);
+        KubeUtils.createResource(apiClient, group, version, plural, namespace, jsonBody, name);
     }
    
+
+    public static Map getExistingPipelineResource(ApiClient apiClient, String namespace, String name) throws Exception {
+        String group = KubeUtils.TEKTON_GROUP;
+        String version = KubeUtils.TEKTON_VERSION;
+        String plural = KubeUtils.TEKTON_PIPELINE_RESOURCE_PLURAL;
+        Map ret = null;
+        CustomObjectsApi customApi = new CustomObjectsApi(apiClient);
+        try {
+            Object obj = customApi.getNamespacedCustomObject(group, version, namespace, plural, name);
+            ret = (Map) obj;
+        } catch(ApiException ex) {
+            logger.error("can't get existing tekton resource {}/{}", namespace, name, ex);
+            int code = ex.getCode();
+            if ( code != 404) {
+                // some other issue than app does not exist
+                throw ex;
+            }
+        }
+        return ret;
+    }
+
+    public static Map getExistingPipelineRun(ApiClient apiClient, String namespace, String name) throws Exception {
+        String group = KubeUtils.TEKTON_GROUP;
+        String version = KubeUtils.TEKTON_VERSION;
+        String plural = KubeUtils.TEKTON_PIPELINE_RUN_PLURAL;
+        Map ret = null;
+        CustomObjectsApi customApi = new CustomObjectsApi(apiClient);
+        try {
+            Object obj = customApi.getNamespacedCustomObject(group, version, namespace, plural, name);
+            ret = (Map) obj;
+        } catch(ApiException ex) {
+            logger.error("can't get existing tekton pipeline run {}/{}", namespace, name, ex);
+            int code = ex.getCode();
+            if ( code != 404) {
+                // some other issue than app does not exist
+                throw ex;
+            }
+        }
+        return ret;
+    }
+ 
 }

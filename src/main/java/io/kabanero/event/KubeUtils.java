@@ -37,6 +37,10 @@ import org.slf4j.LoggerFactory;
 public class KubeUtils {
     private static final Logger logger = LoggerFactory.getLogger(KubeUtils.class);
 
+    public static String TEKTON_GROUP = "tekton.dev";
+    public static String TEKTON_VERSION = "v1alpha1";
+    public static String TEKTON_PIPELINE_RESOURCE_PLURAL = "pipelineresources";
+    public static String TEKTON_PIPELINE_RUN_PLURAL = "pipelineruns";
 
     /* Note: DO NOT change the time unit. This is being used in WatchResources.java */
     public static int DEFAULT_READ_TIMEOUT = 60;
@@ -424,44 +428,5 @@ public class KubeUtils {
        customApi.patchNamespacedCustomObjectStatus(group, version, namespace, plural, name, json);
     }
 
-    /* Delete all apps created for an external resource WAS-ND-Cell or Liberty-Collective
-        The "prism.platform.name" annotation for the app resource should match the parameter kubeName
-        client: ApiClient to Kubernetes
-        namespace: namespace of the external resource
-        kubeCellName: name of the external resource (WAS-ND-Cell or Liberty-Collective) as defined in Kubernetes
-        group, version, plural: resource type of external application 
-     */
-    public static void deleteAppsForExternalResource(ApiClient client, String namespace, String kubeCellName, String group,
-     String version, String plural_App) {
-     logger.info("deleteAppsForExternalResource {}/{}", namespace, kubeCellName);
-    try {
-
-        CustomObjectsApi customApi = new CustomObjectsApi(client);
-        Object appsObj = customApi.listNamespacedCustomObject(group, version, namespace, plural_App, null, null, null, null);
-        if ( appsObj == null ) return;
-
-        // Get list of all apps
-        Map appListMap = (Map)appsObj;
-        List appsList = (List)appListMap.get("items");
-        for (Object appObj: appsList) {
-            Map appItem = (Map)appObj;
-            ResourceInfo resInfo = getResourceInfo(appItem);
-            // if ( resInfo != null ) {
-            //    System.out.printf("deleteAppsForCell: app %s\n", resInfo.key);
-            //}
-            if (resInfo != null && resInfo.kubeCellName != null &&
-               resInfo.kubeCellName.equals(kubeCellName) ) {
-                try {
-                    deleteKubeResource(client, resInfo.namespace, resInfo.name, group, version, plural_App);
-                } catch(Exception ex) {
-                     // ignore excetionps when deleting. May be gone already
-                    logger.error("Exception in deleteAppsForExternalResoure", ex);
-                }
-            }
-        }
-    } catch(ApiException ex) {
-        logger.error("Exception in deleteAppsForExternalResoure", ex);
-    }
-    }
 
 }
