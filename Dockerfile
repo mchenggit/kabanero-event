@@ -1,6 +1,7 @@
 FROM maven:3.6.1-ibmjava-8 as builder
-COPY src /src
 COPY pom.xml /
+RUN mvn verify clean --fail-never
+COPY src /src
 COPY resource /resource
 RUN mvn install
 
@@ -30,4 +31,4 @@ COPY --from=builder --chown=kabanero:root resource/log4j.debug.properties resour
 
 
 ENV LOG4J_CONFIGURATION_FILE=resource/log4j.properties
-CMD java -classpath /kabanero/lib/kabanero-event-1.0-SNAPSHOT-jar-with-dependencies.jar io.kabanero.event.Main
+CMD java -Dcom.ibm.jsse2.overrideDefaultTLS=true -classpath /kabanero/lib/kabanero-event-1.0-SNAPSHOT-jar-with-dependencies.jar io.kabanero.event.Main
