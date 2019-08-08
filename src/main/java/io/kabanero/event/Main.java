@@ -68,11 +68,13 @@ public class Main {
                            imageLocation);
 
                    String branch = commit.ref.substring(commit.ref.lastIndexOf("/") + 1);
+                   String gitUrl = commit.repository.gitUrl.replace("://", "@")
+                                                           .replaceFirst("/", ":");
                    logger.info("Creating Git pipeline resource: name {}, namespace {}, branch {}, repoLocation: {}",
                            "git-source",
                            namespace,
                            branch,
-                           commit.repository.gitUrl);
+                           gitUrl);
 
                    logger.info("Running pipeline: name {}, namespace {}, pipelineRef {}, gitResourceRef {}, dockerImageRef {}, serviceAccount {}, timeout {}, triggerType {}",
                            "appsody-manual-pipeline-run",
@@ -93,7 +95,7 @@ public class Main {
                                "git-source",
                                namespace,
                                branch,
-                               commit.repository.gitUrl);
+                               gitUrl);
                        TektonUtils.runPipeline(apiClient,
                                "appsody-manual-pipeline-run",
                                "kabanero",
