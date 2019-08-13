@@ -59,7 +59,7 @@ The initial version of Kabanero will support:
 - Github for source repository 
 - Tekton for pipeline
 
-In order to ensure the design is extensible,  the remainder of this write-up covers more than one development environments, source control repositories, and pipeline technologies, even some may not be in the current Kabanero roadmap.
+In order to ensure the design is extensible,  the remainder of this write-up covers more than one development environments, source control repositories, and pipeline technologies, even though some may not be in the current Kabanero roadmap.
 
 ## Usage Scenarios
 
@@ -70,7 +70,7 @@ This section captures the usage scenarios, from which we can derive the event ty
 The production environment is in its own cluster `Prod-cluster`, and is consist of 3 different applications:
 ![Production Environment](Productioncluster.jpg)
 
-The second application is an external facing UI application in the namespace ui-prod.  Its image is in the ui-prod namespace, and named ui. It depends on the service svc-a, and another service svc-b.
+The first application is an external facing UI application in the namespace ui-prod.  Its image is in the ui-prod namespace, and named ui. It depends on the service svc-a, and another service svc-b.
 
 The second application is a microservice svc-a that is deployed in namespace a-prod. Its image is in the internal production repsitory, and in the namespace a-prod. This is a standalone shared service that may be called by other applications as well.  
 
@@ -86,7 +86,7 @@ The UI application follows a true cloud-native development process:
 - A pull request requires the following status checks before code may be merged back to `master`:
    - code review 
    - test build 
-- A test build is triggered automatically for each pull request, and upon successful test build, the status check for test build is automatically marked successful.
+- A test build is triggered automatically for each pull request, and upon successful test build, the status check for test build is automatically marked successful in the pull request.
 
 The pipeline is shown below:
 
@@ -97,20 +97,20 @@ The pipeline is shown below:
 Prerequisites for the enterprise:
 - A Github organization has been created.
 - A Github repository for the ui application has been created, and developers authorized.
-- The devops architect has pre-configured a Github organizational webook to automatically trigger a Tekton build when a pull request is created or updated. The configuration for the `ui` piepline has been provided to Kabanero.  The end of a successful test build automatically marks the `test build` status check as successful.  
-- Upon successful merge into `master`, the `svc-a` image in the `ui-test` namespace is automatically tagged, and the `ui` application redeployed.  **TBD**: Is a build from master required, or is the image built from the PR the latest?
-- Kabanero has been configured with standardized stacks.
+- The devops architect has pre-configured a Github organizational webook to automatically trigger a Tekton build when a pull request is created or updated. The configuration for the `ui` piepline has been provided to Kabanero so that it knows how to trigger a build for the `ui` repository.  The end of a successful test build automatically marks the `test build` status check for the pull request as successful.  
+- Upon successful merge into `master`, the `svc-a` image in the `ui-test` namespace is automatically tagged, and the `ui` application redeployed.  **TBD**: Is a build from master required, or is the image built from the PR always the latest?
+- Appsody has been configured with standardized stacks.
 
 Prerequisites for the Developers:
 - Developer installs Kabanero Client to local laptop/desktop
 - Developer installs Appsody on laptop/desktop.  (**TBD**: Is this a special version that knows where the standardized stacks are, or will it go to Kabanero to get the location)
-- For local testing, either there are stubs for svc-a and svc-b, or a working svc-a and svc-b service for local testing has been set up and made available for developers.
+- For local testing, either there are stubs for svc-a and svc-b, or a working svc-a and svc-b service for local testing has been set up and made available for developers. (This is outside the scope of this document.)
 
 The developer sets up a new environment for `ui` development as follows:
 - Developer creates a branch and clones the branch into local environment.
 - Developer logs into Kabanero
 - Developer calls `appsody init Node.js --no-template` to initialize the node.js local development environment
-- Developer inner loop
+- Developer inner loop:
    - Make code change
   - Call `appsody build`, or `appsody run`, or `appsody debug` as needed.
 - Developer periodically pushes changes to the  branch.
@@ -120,40 +120,43 @@ When the developer is ready to merge to master:
   - A test build is automatically triggered. 
 - Developer waits for status change on the Github checks:
    - code review approval
-   - test build 
+   - test build result
 - When all status checks are successful, developer merges the change into `master`
 
-If the test build is unsuccessful, developer receives an email from Github with instructions on how to access the test build.  **TBD**
+If the test build is unsuccessful, developer receives an email from Github with instructions on how to access the test build.  **TBD:**
 - How does the developer access the build logs:
   - the logs may be copied to a remote file system, or
   - developer may be given access to the build pod, or
-  - Or an front end application may be provided to shield the details.
-- It's possible that build is successful, but test may fail. What's the best way to help developer debug failed tests? 
-   - Login to the failed pod is the most directly way.
+  - A front end application may be provided to shield the details.
+- It's possible for a build to be successful, but test may fail. What's the best way to help developer debug failed tests? 
+   - Developer is given instructions on how to login to the pod.
 
 #### Usage Scenario for Devops/Solution Architect
 
-The architect is responsible for creating the appsody stack and making it active for Kabanero. **TBD**: Find link to docs.
+The architect is responsible for creating the appsody stack and making it active . **TBD**: Get link to docs.
 
-The architect creates the Github organizational webhook following instructions here: https://help.github.com/en/articles/configuring-webhooks-for-organization-events-in-your-enterprise-account. The Kabanoer listen URL for to receeive Github events is: **TBD**. The Github events to be received are **TBD**.
-The architect sets up ssh key to access the repositories via instructions here:https://developer.github.com/v3/guides/managing-deploy-keys/. **TBD**: When the pipeline needs to extract from Github, it needs to be informed of what SSH key to use. When the piepeline needs to record the outcome of a test build, it needs the API key to call the GIthub API.
+The architect creates the Github organizational webhook following instructions here: https://help.github.com/en/articles/configuring-webhooks-for-organization-events-in-your-enterprise-account. The architect finds the Kabanero Github event listener URL and secret to receeive Github events by: **TBD**. The Github events to be received are **TBD**.
+The architect sets up ssh key to access the repositories via instructions here: https://developer.github.com/v3/guides/managing-deploy-keys/. **TBD**: When the pipeline needs to extract from Github, it needs to be informed of what SSH key to use. When the piepeline needs to record the outcome of a test build, it needs the API key to call the GIthub API. The instructions are **TBD**.
 
 The architect creates the Tekton Pipeline and Tasks for the `ui` application. This involves:
-- Using any builder images that may already be available from Tekton team for building node.js applications. **TBD**: Are such images available?
-- If the build is succseeful,  additional Pipeline Tasks will install `ui-test`, `ui`, `svc-a` and `svc-b` images, and run the `ui-test`.
-- the last step of the task is to record the github status for test-build:
+- Using any builder images that may already be available from Tekton team for building node.js applications. **TBD**: Are such images available? **TBD** Are they installed as part of Kabanero?
+- Using any pre-existing Tekton Tasks that may be shipped with Tekton or Kabanero. **TBD**: Are they available?
+- If the build is successful,  additional Pipeline Tasks will install `ui-test`, `ui`, `svc-a` and `svc-b` images, and run the `ui-test`.
+- the last step of the task is to record the github status for test-build. (**TBD**: ship a task to do this? ):
    - successful if all tests pass
    - failed if some tests fails
 - The build fails if any of the step fails.
 
-**TBD**: If the build succeeds, the image is tagged and pushed to the `ui-test` repository. 
+**TBD**: If the build succeeds, the image is tagged and pushed to the `ui-test` repository. Provide a task to do this?
 
-**TBD**: When does the image get tagged and pushed to the production cluster?
+**TBD**: When does the image get tagged and pushed to the production cluster? Manually by the administrator?
 
-The Architect inform Kabanero what actions to take for pull request on an `ui` repository:
+**TBD**: Recommended strategy for tagging.
+
+The Architect informs configures Kabanero what actions to take for pull request on an `ui` repository:
 - Input: Github
-  - Reposition location: URL for the `ui` repository.
-  - Even type: Pull Request. **TBD**: Can this be more generic?
+  - Repository location: URL for the `ui` repository.
+  - Event type: Pull Request. **TBD**: Can this be more generic?
   - Record Github status check for test build.
 - Output: Docker
   - image location
@@ -163,14 +166,14 @@ The Architect inform Kabanero what actions to take for pull request on an `ui` r
 
 Upon receipt of an event from Github, the Kabanero listener posts the event to the sourceRepositoryEvent topic. **TBD**: list of event types and their content
 
-The SourceRepositoryEvent even consumer listens for events on the SourceRepositoryEvent topic. 
-- It matches the repository URL to the repositories it can handle
+The SourceRepositoryEvent event consumer listens for events on the SourceRepositoryEvent topic. 
+- It matches the repository URL to the repositories that have been configured. (**TBD**: default rules.)
 - It finds all the actions it is capable of handling for the event. In this case, the action is for starting a Tekton run
 - It creates the Tekton Resources for the run, and starts the run.
 - **TBD**:  resource management:
-   - It controls the number of concurrent runs
-   - It performs garbage collection to remove old runs.
-- It monitors the results of the run, and informs the user of the outcome, if configured.
+   - Number of concurrent runs
+   - Garbage collection to remove old runs.
+- It monitors the results of the run, and informs the user of the outcome, if configured. **TBD** how does the user get informed?
 
 ### Usage Scenarios for svc-a
 
