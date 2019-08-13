@@ -178,4 +178,4 @@ The SourceRepositoryEvent even consumer listens for events on the SourceReposito
 
 ### Usage Scenarios for svc-b
 
-![svc-b Pipeline](SVCBPipeLine.jpg)
+![svc-b Pipeline](SVCBPipeline.jpg)
