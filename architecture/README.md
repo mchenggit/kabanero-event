@@ -28,13 +28,13 @@ The goal of Kabanero is to manage cloud native devops infrastructure. Such an in
 Kabanero allows a devops/solution architect to define:
 - Standardized development environments. For example:
   - Which stacks are available for Appsody
-  - Which stacks are available for Eclipse Che
+  - Which stacks are available for Eclipse Che or Openshift Codeready Workspaces.
 - What actions to take when source code is checked into source control. For example,
   - which Pipelines to execute
   - When to promote to the next stage of the pipeline
 
-Kabanero allows a developer to concentrate as much on coding/testing inner loop as much. A developer
-- can stand up a standard development environment very quickly. For example, a developer may create a stack from Appsody or Eclipse Che within minutes.
+Kabanero allows a developer to concentrate as much on coding/testing inner loop as possible. A developer
+- can stand up a standard development environment very quickly. For example, a developer may create a new stack from Appsody or Eclipse Che within minutes.
 - Can rely on the environment to automatically trigger test builds before committing change into source control, with logs made available to the developer.
 - Can rely on the environment to trigger additional release builds and run additional tests, and to be able to debug in the test environment when required.
 
@@ -67,7 +67,7 @@ This section captures the usage scenarios, from which we can derive the event ty
 
 ### The Production Environment
 
-The production environment is in its own cluster `Prod-cluster`, and is consist of 3 different applications:
+The production environment is in its own cluster `Prod-cluster`, and consists of 3 different applications:
 ![Production Environment](Productioncluster.jpg)
 
 The first application is an external facing UI application in the namespace ui-prod.  Its image is in the ui-prod namespace, and named ui. It depends on the service svc-a, and another service svc-b.
@@ -86,20 +86,52 @@ The UI application follows a true cloud-native development process:
 - A pull request requires the following status checks before code may be merged back to `master`:
    - code review 
    - test build 
-- A test build is triggered automatically for each pull request, and upon successful test build, the status check for test build is automatically marked successful in the pull request.
+- A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is now allowed to merge code without code review and successful test build.
+- Developers use Appsody on their local machines as development environment.
+
 
 The pipeline is shown below:
 
 ![UI Pipeline](UIPipeline.jpg)
 
+**TBD:** We also need a pipeline to build the `master` branch. This will be added later.
+
+#### Usage Scenario for Devops/Solution Architect
+
+For the `ui` application, the developers use appsody as their local development environment. The architect is responsible for creating the Kabanero collection where the standardized appsody stacks are defined, and making the collection active for developer . **TBD**: Get link to docs.
+
+The architect creates the Tekton Pipeline and Tasks for the `ui` application. This involves:
+- Using any existing pipelines and tasks that may already be available for building node.js applications as the basis to create a new pipeline.
+- Using any existing pipeline tasks for interacting with Github:
+  - When build is kicked off, update the Github status check with a warning that build is on-going, to prevent the user from merging code. (**TBD**: Is this part of Tekton or Kabanero?)
+  - When build is successful,  Pipeline Tasks are used to install `ui-test`, `ui`, `svc-a` and `svc-b` images, and run the `ui-test` verification test.
+- The last task of the pipeline is to record the github status and how to access the build. (**TBD:** Is this possible with Tekton, or is this handled by Kabanero?)
+   - successful if all tasks succeed.
+   - fail if some tasks fails
+
+For the source repository, the architect:
+- Creates the Github organizational functional IDs and webhook following instructions at: https://help.github.com/en/articles/configuring-webhooks-for-organization-events-in-your-enterprise-account.
+  - Finds the Kabanero Github event listener URL and secret to receive Github events: **TBD**: how to find the URL and secret. 
+  - The Github events to be received are:
+      - Pull Requests
+- Creates the Kuberentes secrets required to access the repositories in the organization, depending on what is supported by the build pipeline, and Github: https://developer.github.com/v3/guides/managing-deploy-keys/. 
+- Creates the `ui` repository under a Github organization. 
+- Authorizes developers by adding them as collaborators.
+
+
+The Architect configures Kabanero what actions to take for pull request on an `ui` repository:
+- Input: Github
+  - Repository location: URL for the `ui` repository.
+  - Event type: Pull Request. **TBD**: Can this be more generic?
+  - Record Github status check for test build.
+- Output: Docker
+  - image location
+**TBD**: Come up with reasonable defaults.
+
+**TBD**: Another pipeline to build from master is probably required. 
+
 #### Usage Scenario for Developer
 
-Prerequisites for the enterprise:
-- A Github organization has been created.
-- A Github repository for the ui application has been created, and developers authorized.
-- The devops architect has pre-configured a Github organizational webook to automatically trigger a Tekton build when a pull request is created or updated. The configuration for the `ui` piepline has been provided to Kabanero so that it knows how to trigger a build for the `ui` repository.  The end of a successful test build automatically marks the `test build` status check for the pull request as successful.  
-- Upon successful merge into `master`, the `svc-a` image in the `ui-test` namespace is automatically tagged, and the `ui` application redeployed.  **TBD**: Is a build from master required, or is the image built from the PR always the latest?
-- Appsody has been configured with standardized stacks.
 
 Prerequisites for the Developers:
 - Developer installs Kabanero Client to local laptop/desktop
@@ -123,57 +155,21 @@ When the developer is ready to merge to master:
    - test build result
 - When all status checks are successful, developer merges the change into `master`
 
-If the test build is unsuccessful, developer receives an email from Github with instructions on how to access the test build.  **TBD:**
-- How does the developer access the build logs:
-  - the logs may be copied to a remote file system, or
-  - developer may be given access to the build pod, or
-  - A front end application may be provided to shield the details.
-- It's possible for a build to be successful, but test may fail. What's the best way to help developer debug failed tests? 
-   - Developer is given instructions on how to login to the pod.
-
-#### Usage Scenario for Devops/Solution Architect
-
-The architect is responsible for creating the appsody stack and making it active . **TBD**: Get link to docs.
-
-The architect creates the Github organizational webhook following instructions here: https://help.github.com/en/articles/configuring-webhooks-for-organization-events-in-your-enterprise-account. The architect finds the Kabanero Github event listener URL and secret to receeive Github events by: **TBD**. The Github events to be received are **TBD**.
-The architect sets up ssh key to access the repositories via instructions here: https://developer.github.com/v3/guides/managing-deploy-keys/. **TBD**: When the pipeline needs to extract from Github, it needs to be informed of what SSH key to use. When the piepeline needs to record the outcome of a test build, it needs the API key to call the GIthub API. The instructions are **TBD**.
-
-The architect creates the Tekton Pipeline and Tasks for the `ui` application. This involves:
-- Using any builder images that may already be available from Tekton team for building node.js applications. **TBD**: Are such images available? **TBD** Are they installed as part of Kabanero?
-- Using any pre-existing Tekton Tasks that may be shipped with Tekton or Kabanero. **TBD**: Are they available?
-- If the build is successful,  additional Pipeline Tasks will install `ui-test`, `ui`, `svc-a` and `svc-b` images, and run the `ui-test`.
-- the last step of the task is to record the github status for test-build. (**TBD**: ship a task to do this? ):
-   - successful if all tests pass
-   - failed if some tests fails
-- The build fails if any of the step fails.
-
-**TBD**: If the build succeeds, the image is tagged and pushed to the `ui-test` repository. Provide a task to do this?
-
-**TBD**: When does the image get tagged and pushed to the production cluster? Manually by the administrator?
-
-**TBD**: Recommended strategy for tagging.
-
-The Architect informs configures Kabanero what actions to take for pull request on an `ui` repository:
-- Input: Github
-  - Repository location: URL for the `ui` repository.
-  - Event type: Pull Request. **TBD**: Can this be more generic?
-  - Record Github status check for test build.
-- Output: Docker
-  - image location
+If the test build is unsuccessful, developer receives an email from Github with instructions on how to access the build and tests.  
+  - developer is given access to the build pod and test pod.
 
 
 #### The Kabanero Flow
 
-Upon receipt of an event from Github, the Kabanero listener posts the event to the sourceRepositoryEvent topic. **TBD**: list of event types and their content
+Upon receipt of an event from Github, the Kabanero listener posts the event to the sourceRepository topic. **TBD**: list of event types and their content
 
-The SourceRepositoryEvent event consumer listens for events on the SourceRepositoryEvent topic. 
-- It matches the repository URL to the repositories that have been configured. (**TBD**: default rules.)
+The SourceRepository consumer listens for events on the SourceRepository topic. 
+- It matches the repository URL to the repositories that have been configured. 
 - It finds all the actions it is capable of handling for the event. In this case, the action is for starting a Tekton run
 - It creates the Tekton Resources for the run, and starts the run.
 - **TBD**:  resource management:
    - Number of concurrent runs
    - Garbage collection to remove old runs.
-- It monitors the results of the run, and informs the user of the outcome, if configured. **TBD** how does the user get informed?
 
 ### Usage Scenarios for svc-a
 
