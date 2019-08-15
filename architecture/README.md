@@ -255,12 +255,12 @@ The purpose of the sample `svc-b` is to capture other scenarios currently out of
 #### What triggers a new run of pipeline
 
 The following Github/GHE events may be configured to trigger a new run of the pipeline:
-- Push
-- Pull request
+- Push: rebuild the repository up to the commits in the push.
+- Pull request: Rebuild upstream repository merged with the commits in the pull request.
 
-A new run may also be triggered on a timer. One example is Liberty build that kicks off once per hour to build the integration branch.
+A new run may also be triggered on a timer. One example is an integration branch that is built every hour.
 
-A new run may be triggered manually, for example, when administrator approval is required to to proceed to the current stage.
+A new run may be triggered manually, for example, when manual action following approval is required to proceed to the next stage.
 
 A new run may be triggered when one or more dependent images changes. For example, an intermediate stage pipeline is triggered whenever one of its dependent images changes. The devops architect may define what is an `image change`. For example,
 - whenever the SHA for the `latest` tag changes
@@ -268,7 +268,7 @@ A new run may be triggered when one or more dependent images changes. For exampl
 
 A new run may be triggered when the pipeline definition and its dependency changes. For example, 
 - When the specification of the pipeline changes.
-- When a builder image changes to incorporate changes to operating system, and prerequisite software.
+- When a builder image is modified to incorporate new versions of operating system, and prerequisite software.
 
 #### Promotion to Next Stage
 
@@ -276,16 +276,15 @@ Promotion to next stage is supported via tagging the output image for the next s
 - via the execution of pipeline (or by Kabanero if the run succeeds??)
 - Manually by the administrator.
 
-Customization for the next stage may be required. For now, we delegate these to the next stage pipeline itself. Examples include include:
+Customization for the next stage may be required. For now, we delegate these to the next stage pipeline itself. Examples include:
 - Changing the values of environment variables
-- Changing the values of persistent volume mounts.
 
 #### Repository Specific Workflows
 
 For Github and Github Enterprise:
-- Support user repository specific webhook
-- Support organizational webhooks that covers multiple repositories.
-- Support updating pull request status check for builds
+- repository specific webhook
+- organizational webhooks that covers multiple repositories within the organization.
+- Updating pull request status check for builds
 
 #### Support for existing Openshift technologies
 
