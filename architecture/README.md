@@ -1,6 +1,19 @@
 # Kabanero Event Architecture
 
+## Table of Contents
+* [Introduction](#Introduction)
+* [What is Kabanero?](#What_is_Kabanero)
+* [Usage Scenarios](#Usage_Scenarios)
+* [Functional Specification](#Functional_Specification)
+* [List of Events](#List_Events)
 
+
+<a name="Introduction"></a>
+## Introduction
+
+This document contains the design of events in Kabanero. We start with a quick list of terms and their definitions for the purpose of this document. This followed by an introduction to Kabanero and its value as a management infrastructure for cloud native devops. We then present the usage scenarios for Kabanero via three sample applications and their devops life cycle. This is followed by the functional specification to support the usage scenarios. Finally, we list the events that are required to support the functional specification.
+
+<a name="What_is_Kabanero"></a>
 ## What is Kabanero?
 
 The goal of Kabanero is to manage cloud native devops infrastructure. Such an infrastructure may contain many components (though not all are in the Kabanero roadmap) :
@@ -59,8 +72,9 @@ The initial version of Kabanero will support:
 - Github for source repository 
 - Tekton for pipeline
 
-In order to ensure the design is extensible,  the remainder of this write-up covers more than one development environments, source control repositories, and pipeline technologies, even though some may not be in the current Kabanero roadmap.
+In order to ensure the design is extensible,  the remainder of this document covers more than one development environments, source control repositories, and pipeline technologies, even though some may not be in the Kabanero roadmap.
 
+<a name="Usage_Scenarios"></a>
 ## Usage Scenarios
 
 This section captures the usage scenarios, from which we can derive the event types, and producers and consumers of events. We begin with a sample production environment consisting of 3 different applications/services. This is followed by discussion on the devops pipeline that produces the production environment.
@@ -79,14 +93,13 @@ The third and final application is a microservice svc-b. It is deployed in the n
 
 ### Usage Scenarios for ui
 
-The UI application follows a true cloud-native development process:
+The `UI` application example is meant as a continuous deployment sample, where code in the `master` branch is always ready to ship. It follows a true cloud-native development process:
 -  It uses Github or Github Enterprise as the source repository.  
-- It follows the paradigm that code in the `master` branch is always ready to deploy. 
 - Developers are required to create branches for all source code changes.
 - A pull request requires the following status checks before code may be merged back to `master`:
    - code review 
    - test build 
-- A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is now allowed to merge code without code review and successful test build.
+- A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is not allowed to merge code without code review and successful test build.
 - Developers use Appsody on their local machines as development environment.
 
 
@@ -132,7 +145,6 @@ The Architect configures Kabanero what actions to take for pull request on an `u
 
 #### Usage Scenario for Developer
 
-
 Prerequisites for the Developers:
 - Developer installs Kabanero Client to local laptop/desktop
 - Developer installs Appsody on laptop/desktop.  (**TBD**: Is this a special version that knows where the standardized stacks are, or will it go to Kabanero to get the location)
@@ -159,7 +171,7 @@ If the test build is unsuccessful, developer receives an email from Github with 
   - developer is given access to the build pod and test pod.
 
 
-#### The Kabanero Flow
+#### Kabanero Internals
 
 Upon receipt of an event from Github, the Kabanero listener posts the event to the sourceRepository topic. **TBD**: list of event types and their content
 
@@ -175,6 +187,125 @@ The SourceRepository consumer listens for events on the SourceRepository topic.
 
 ![svc-a Pipeline](SVCAPipeLine.jpg)
 
+The second application, `svc-a`,  is meant to capture a more complex workflow for continuous delivery. In this workflow, code is delivered continuously. However, unlike the `ui` application, it is not continuously deployed to production. 
+- It was developed using Openshift Codeready Workspaces
+- It uses Github or Github Enterprise as the source repository.  
+- Developers are required to create branches or forks for all source code changes.
+- A pull request requires the following status checks before code may be merged to `integration` branch:
+   - code review 
+   - test build 
+- A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is not allowed to merge code without code review and successful test build.
+- A test build from the `integration` branch is kicked off from a timer and additional tests run to ensure the quality of the code.  (Note: this is now yet shown in the diagram.) Code is not merge to `master` branch until `integration` branch tests are run successfully.
+- In addition, extensive system tests are run before code is approved to ship.  Those images that are ready to ship are tagged with version such as  such 1.0.0.0, 1.0.0.1, etc.
+
+**Note:** This scenario also uses Openshift Pipelines, which is only available starting Openshift 4.
+
+#### Functional Changes to Existing Software:
+
+Kabanero operator changes:
+- Install of Kabanero should not install Tekton. It should use pre-existing Openshift Pipelines for Tekton.
+
+Eclipse Che/Redhat Codeready Workspaces changes:
+- Pick up predefined stacks from Kabanero
+
+#### Usage Scenario for Devops/Solution Architect
+
+For the `svc-a` application, the architect is responsible for creating the Kabanero collection where the standardized stacks are defined for Eclipse Che and made available to Eclipse Che. This may include existing stacks already available in Openshift Codeready Workspaces, and any additional.  **TBD**:
+- How to ensure Eclipse che/Codeready Workspaces only pick up standardized stacks
+- Do we want to prevent developers from creating their own stack?
+
+The architect configures Github in the same way as ui application.
+
+The architect configures Tekton pipeline in the same way as ui application. The difference is the that many of the existing stacks in Codeready Workspaces can be built using existing source-2-image builders. The s2i step may be incorporated as part of the pipeline. See example here: https://github.com/openshift/pipelines-tutorial
+
+
+#### Usage Scenario for Developer
+
+The developer creates a workspace in Codeready workspaces:
+- Login to Codeready Workspaces
+- Select one of the predefined stacks
+- Create a new workspace
+- Configure the credentials required to access Github `svc-a` repository
+- Create a new branch
+- Clone branch from Github
+
+The developer code/debug inner loo:
+- Make local code changes directly in Eclipse che
+- Run unit test and debugs directly in Eclipse Che
+- Push changes  to branch one or more times
+
+The developer flow for creating the pull request is the same as that for the `ui` application.
+
 ### Usage Scenarios for svc-b
 
+The purpose of the sample `svc-b` is to capture a other scenarios not yet covered by the previous scenarios. Possible scenarios, which may require adding additional applications, include:
+- custom builds that produce more than one docker image.
+- Builds that use the `docker` build strategy in openshift
+- Builds that use the `jenkins` build strategy in openshift
+- Builds that use the `s2i` build strategy in openshift, but does not use the Tekton pipeline.
+
+**The details of these additional scenarios are TBD.** 
+
 ![svc-b Pipeline](SVCBPipeline.jpg)
+
+### Summary of the Usage Scenarios
+
+#### What triggers a new run of pipeline
+
+The following Github/GHE events may be configured to trigger a new run of the pipeline:
+- Push
+- Pull request
+
+A new run may also be triggered on a timer. One example is Liberty build that kicks off once per hour to build the integration branch.
+
+A new run may be triggered manually, for example, when administrator approval is required to to proceed to the current stage.
+
+A new run may be triggered when one or more dependent images changes. For example, an intermediate stage pipeline is triggered whenever one of its dependent images changes. The devops architect may define what is an `image change`. For example,
+- whenever the SHA for the `latest` tag changes
+- Whenever a new tag is created that matches a prescribed pattern, such as `3.0.0.1`
+
+A new run may be triggered when the pipeline definition and its dependency changes. For example, 
+- When the specification of the pipeline changes.
+- When a builder image changes to incorporate changes to operating system, and prerequisite software.
+
+#### Promotion to Next Stage
+
+Promotion to next stage is supported via tagging the output image for the next stage followed by a push if required. This may be done:
+- automatically via configuration to Kabanero
+- Manually by the administrator.
+
+**TBD: This to be delegated to the pipeline of the next stage.**
+Customization for the next stage is often required. These may include:
+- Changing the values of environment variables
+- changing the values of files that may be mounted from Confimap or Secrets
+- Changing the values of persistent volume mounts.
+- A new build may be required.
+
+#### Repository Specific Workflows
+
+For Github and Github Enterprise:
+- Support for organizational webhooks
+- Support for updating Github status checks for builds
+
+#### Support for existing Openshift technologies
+
+**This is currently out of scope.**
+- Build technologies:
+  - s2i
+  - Docker
+  - Jenkins
+- Runtimes
+  - Read Hat runtimes and their corresponding builders. (Note: this likely is the same set of builders as last bullet. )
+- Development:
+  - Codeready Workspaces
+- Pipelines:
+  - Openshift Pipelines
+
+
+<a name="Functional_Specification"></a>
+## Functional Specification
+
+
+<a name="List_Events"></a>
+
+## List of Events
