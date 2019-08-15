@@ -238,7 +238,7 @@ The developer flow for creating the pull request is the same as that for the `ui
 
 ### Usage Scenarios for svc-b
 
-The purpose of the sample `svc-b` is to capture a other scenarios not yet covered by the previous scenarios. Possible scenarios, which may require adding additional applications, include:
+The purpose of the sample `svc-b` is to capture other scenarios currently out of scope. Possible scenarios, which may require adding additional applications, include:
 - custom builds that produce more than one docker image.
 - Builds that use the `docker` build strategy in openshift
 - Builds that use the `jenkins` build strategy in openshift
@@ -271,21 +271,19 @@ A new run may be triggered when the pipeline definition and its dependency chang
 #### Promotion to Next Stage
 
 Promotion to next stage is supported via tagging the output image for the next stage followed by a push if required. This may be done:
-- automatically via configuration to Kabanero
+- via the execution of pipeline (or by Kabanero if the run succeeds??)
 - Manually by the administrator.
 
-**TBD: This to be delegated to the pipeline of the next stage.**
-Customization for the next stage is often required. These may include:
+Customization for the next stage may be required. For now, we delegate these to the next stage pipeline itself. Examples include include:
 - Changing the values of environment variables
-- changing the values of files that may be mounted from Confimap or Secrets
 - Changing the values of persistent volume mounts.
-- A new build may be required.
 
 #### Repository Specific Workflows
 
 For Github and Github Enterprise:
-- Support for organizational webhooks
-- Support for updating Github status checks for builds
+- Support user repository specific webhook
+- Support organizational webhooks that covers multiple repositories.
+- Support updating pull request status check for builds
 
 #### Support for existing Openshift technologies
 
@@ -305,7 +303,64 @@ For Github and Github Enterprise:
 <a name="Functional_Specification"></a>
 ## Functional Specification
 
+How to find the URL and secret for the Kabanero Listener
 
 <a name="List_Events"></a>
-
 ## List of Events
+
+### Topic: Pipeline
+
+The name of the topic is "Pipeline"
+The attributes are:
+- pipelineType: the type of pipeline, currently only `Tekton`
+- action: action performed, one of:
+  - `started`: a new run has started
+  - `completed`: a run has completed. 
+  - `deleted`: a run has been deleted.
+  - `statusUpdate`: The status of a run has changed.
+- name: the name of the run, should be a Kubernetes resource name. 
+  - For Tekton, it's the name of the run.
+- actionDetails: pipeline independent details related to an action
+   - for action == `started`, what triggered the new run:
+     - manual: manual trigger + who triggered it.
+     - repository: details of change to the repository
+     - dependentImage: dependent images changed + details of change to the image
+     - PipelineSpecification: the specification of the pipeline has changed. This includes the pipeline specification itself + changes to images in the pipeline infrastructure.
+   - for action == `completed`:
+     - completion status: succeeded, failed, timed out
+   - for action == `deleted`:
+     - reason for deletion if known
+       - for example, garbage collection
+   - for action == `statusUpdate`:
+       - **TBD**: pipeline neutral status update??
+- details: pipeline specific details.
+
+### Topic: SourceRepository
+
+The name of the topic is `SourceRepository`.
+The attributes of the events are:
+- repositoryType : type of repository. 
+- eventName: The name of the event in the repository
+- eventData: The actual JSON object coming from the repository, or a mapping of the data if original data is not JSON
+
+Currently, these are supported:
+- repositoryType:  only github
+  - eventName:
+    - Push
+    - PullRequest
+
+### Topic: ImageRepository
+
+**TBD:** Still need to work out the details.
+The name of the topic is "ImageRpository". The attributes of the event are:
+- repositoryType: type of image repository
+- repositoryLocation  location of the repository
+- imageName: name of the image
+- eventName: name of the event
+- eventData: The actual JSON object associated with the event, or a mapping of the original data to JSON if the original data is not JSON
+
+Supported repositoryType: `Docker`
+
+Supported eventName: 
+ - `tag`: an image has been tagged.
+ - `push`: An image has been pushed.
