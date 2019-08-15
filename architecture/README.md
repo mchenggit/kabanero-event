@@ -11,7 +11,7 @@
 <a name="Introduction"></a>
 ## Introduction
 
-This document contains the design of events in Kabanero. We start with a quick list of terms and their definitions for the purpose of this document. This followed by an introduction to Kabanero and its value as a management infrastructure for cloud native devops. We then present the usage scenarios for Kabanero via three sample applications and their devops life cycle. This is followed by the functional specification to support the usage scenarios. Finally, we list the events that are required to support the functional specification.
+This document contains the design of events in Kabanero. We start with an introduction to Kabanero and its value as a management infrastructure for cloud native devops. We then present the usage scenarios for Kabanero via three sample applications and their devops life cycle. This is followed by the functional specification to support the usage scenarios. Finally, we list the events that are required to support the functional specification.
 
 <a name="What_is_Kabanero"></a>
 ## What is Kabanero?
@@ -42,9 +42,10 @@ Kabanero allows a devops/solution architect to define:
 - Standardized development environments. For example:
   - Which stacks are available for Appsody
   - Which stacks are available for Eclipse Che or Openshift Codeready Workspaces.
-- What actions to take when source code is checked into source control. For example,
+- How to push an application/service through different build/test stages,  from source control repository to production. The architect defines:
+  - What actions to take when source code is checked into source control. 
   - which Pipelines to execute
-  - When to promote to the next stage of the pipeline
+  - how to promote to the next stage of the pipeline
 
 Kabanero allows a developer to concentrate as much on coding/testing inner loop as possible. A developer
 - can stand up a standard development environment very quickly. For example, a developer may create a new stack from Appsody or Eclipse Che within minutes.
@@ -52,6 +53,7 @@ Kabanero allows a developer to concentrate as much on coding/testing inner loop 
 - Can rely on the environment to trigger additional release builds and run additional tests, and to be able to debug in the test environment when required.
 
 Kabanero automates the devops infrastructure as much as possible. It will
+- offer easy to use defaults.
 - Use organizational web hook to process events for all repositories within the organization when configured.
 - Install and run the pipelines automatically when configured.
 - Trigger new builds if the stack has been updated, for example, with security fixes.
