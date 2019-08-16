@@ -320,8 +320,8 @@ For Github and Github Enterprise:
 - The default image name for a build (if only one image) is the name of the repository.
 - The default behavior for a pull request is:
   - Find a matching pipeline
-  - If matching pipeline if Tekton,
-      - Generate required Tekon resources.
+  - If matching pipeline is Tekton,
+      - Generate required Tekton resources.
       - Call the pipeline
 
 
@@ -412,3 +412,19 @@ The name of the topic is "ImageRpository". The attributes of the event are:
 - imageName: name of the image
 - eventData: The actual JSON object associated with the event, or a mapping of the original data to JSON if the original data is not JSON
     - for docker, at least SHA for the image.
+
+
+### Topic: KabaneroAPI
+
+Audit of calls to Kabanero API
+
+ For Kabanero-mgmt:
+- list
+- login
+- logout
+- onboard
+- refresh
+
+**TBD**: How about client side CLI?
+
+**TBD**: any other API? How about any that may be called by Appsody?
