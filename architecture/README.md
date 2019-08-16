@@ -88,28 +88,30 @@ The production environment is in its own cluster `Prod-cluster`, and consists of
 
 The first application is an external facing UI application in the namespace ui-prod.  Its image is in the ui-prod namespace, and named ui. It depends on the service svc-a, and another service svc-b.
 
-The second application is a microservice svc-a that is deployed in namespace a-prod. Its image is in the internal production repsitory, and in the namespace a-prod. This is a standalone shared service that may be called by other applications as well.  
+The second application is a microservice svc-a that is deployed in namespace a-prod. Its image is in the internal production repository, and in the namespace a-prod. This is a standalone shared service that may be called by other applications as well.  
 
 The third and final application is a microservice svc-b. It is deployed in the namespace b-prod, with a corresponding images svc-b, and helper-b. The pod for svc-b runs both images svc-b and helper-b. 
 
 
 ### Usage Scenarios for ui
 
-The `UI` application example is meant as a continuous deployment sample, where code in the `master` branch is always ready to ship. It follows a true cloud-native development process:
+The `UI` application example is meant as a continuous deployment sample, where code in the `master` branch is always ready to deploy. It follows a true cloud-native development process:
 -  It uses Github or Github Enterprise as the source repository.  
-- Developers are required to create branches for all source code changes.
-- A pull request requires the following status checks before code may be merged back to `master`:
-   - code review 
-   - test build 
-- A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is not allowed to merge code without code review and successful test build.
+- It uses the Github branching strategy:
+  - Developers are required to create branches for all source code changes.
+  - A pull request requires the following status checks before code may be merged back to `master`:
+     - code review 
+     - test build 
+- A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is not allowed to merge code without code review and successful test build. 
+- The test build also runs automated tests.
 - Developers use Appsody on their local machines as development environment.
+- Additional manual exploratory testing may be performed with the latest application deployed to the `ui-test` namespace.
 
 
 The pipeline is shown below:
 
 ![UI Pipeline](UIPipeline.jpg)
 
-**TBD:** We also need a pipeline to build the `master` branch. This will be added later.
 
 #### Usage Scenario for Devops/Solution Architect
 
@@ -133,24 +135,29 @@ For the source repository, the architect:
 - Creates the `ui` repository under a Github organization. 
 - Authorizes developers by adding them as collaborators.
 
+Alternatively, for a small or personal project, per-repository webhook may be configured. The steps are essentially the same. The only difference is the the webhook is set up at the repository level rather than at organizational level.
 
-The Architect configures Kabanero what actions to take for pull request on an `ui` repository:
+The architect configures Kabanero what actions to take for pull request on an `ui` repository:
 - Input: Github
   - Repository location: URL for the `ui` repository.
-  - Event type: Pull Request. **TBD**: Can this be more generic?
-  - Record Github status check for test build.
+  - Event type: Pull Request. 
+  - Option to Record Github status check for test build.
 - Output: Docker
   - image location
 **TBD**: Come up with reasonable defaults.
 
-**TBD**: Another pipeline to build from master is probably required. 
+**TBD**: It seems that official deployment from `master` requires a new build from `master`. This does not detract from the discussion, but we do need to add these to the workflow:
+- A new commit into `master` triggers a new build. In theory, this build should succeed. 
+- The new image is tagged.
+- This triggers the pipeline for `ui-test` to run, deploying the new image.
+
 
 #### Usage Scenario for Developer
 
 Prerequisites for the Developers:
 - Developer installs Kabanero Client to local laptop/desktop
 - Developer installs Appsody on laptop/desktop.  (**TBD**: Is this a special version that knows where the standardized stacks are, or will it go to Kabanero to get the location)
-- For local testing, either there are stubs for svc-a and svc-b, or a working svc-a and svc-b service for local testing has been set up and made available for developers. (This is outside the scope of this document.)
+- For local testing, either there are stubs for svc-a and svc-b, or a working svc-a and svc-b service for local testing has been set up and made available for developers, or it is re-deployed for each new run of the build. (Which choice to pick is outside the scope of this document.)
 
 The developer sets up a new environment for `ui` development as follows:
 - Developer creates a branch and clones the branch into local environment.
@@ -175,9 +182,9 @@ If the test build is unsuccessful, developer receives an email from Github with 
 
 #### Kabanero Internals
 
-Upon receipt of an event from Github, the Kabanero listener posts the event to the sourceRepository topic. **TBD**: list of event types and their content
+Upon receipt of a PullRequest event from Github, the Kabanero listener posts a Github PullRequest event to the SourceRepository topic.
 
-The SourceRepository consumer listens for events on the SourceRepository topic. 
+A built-in SourceRepository consumer listens for events on the SourceRepository topic. 
 - It matches the repository URL to the repositories that have been configured. 
 - It finds all the actions it is capable of handling for the event. In this case, the action is for starting a Tekton run
 - It creates the Tekton Resources for the run, and starts the run.
@@ -189,23 +196,25 @@ The SourceRepository consumer listens for events on the SourceRepository topic.
 
 ![svc-a Pipeline](SVCAPipeLine.jpg)
 
-The second application, `svc-a`,  is meant to capture a more complex workflow for continuous delivery. In this workflow, code is delivered continuously. However, unlike the `ui` application, it is not continuously deployed to production. 
+The second application, `svc-a`,  is meant to capture a more complex workflow for continuous delivery. In this workflow, code is delivered continuously. However, unlike the `ui` application, it is not continuously deployed to production.  It uses a branching strategy similar to `Git flow`.
 - It was developed using Openshift Codeready Workspaces
 - It uses Github or Github Enterprise as the source repository.  
-- Developers are required to create branches or forks for all source code changes.
-- A pull request requires the following status checks before code may be merged to `integration` branch:
+- Developers are required to create branches or forks from `develop` branch for all source code changes.
+- A pull request requires the following status checks before code may be merged to `develop` branch:
    - code review 
    - test build 
 - A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is not allowed to merge code without code review and successful test build.
-- A test build from the `integration` branch is kicked off from a timer and additional tests run to ensure the quality of the code.  (Note: this is now yet shown in the diagram.) Code is not merge to `master` branch until `integration` branch tests are run successfully.
-- In addition, extensive system tests are run before code is approved to ship.  Those images that are ready to ship are tagged with version such as  such 1.0.0.0, 1.0.0.1, etc.
+- A test build from the `develop` branch is kicked off from a timer and additional tests run to ensure the quality of the code.  For example, hourly or nightly. (Note: this is now yet shown in the diagram.) 
+- Code is not merge to `master` branch from `develop` branch until it is ready for the next release, after system test.
+- Code merged into `master` is tagged with version number, such as 1.0.0. 
+- The pipeline to the system test is triggered manually for specific commits built from `develop`.
 
 **Note:** This scenario also uses Openshift Pipelines, which is only available starting Openshift 4.
 
 #### Functional Changes to Existing Software:
 
 Kabanero operator changes:
-- Install of Kabanero should not install Tekton. It should use pre-existing Openshift Pipelines for Tekton.
+- Install of Kabanero should not install Tekton. It should use pre-existing Openshift Pipelines based on Tekton.
 
 Eclipse Che/Redhat Codeready Workspaces changes:
 - Pick up predefined stacks from Kabanero
@@ -216,9 +225,9 @@ For the `svc-a` application, the architect is responsible for creating the Kaban
 - How to ensure Eclipse che/Codeready Workspaces only pick up standardized stacks
 - Do we want to prevent developers from creating their own stack?
 
-The architect configures Github in the same way as ui application.
+The architect configures Github in the same way as for `ui` application. The main difference is the creation of `develop` integration branch.
 
-The architect configures Tekton pipeline in the same way as ui application. The difference is the that many of the existing stacks in Codeready Workspaces can be built using existing source-2-image builders. The s2i step may be incorporated as part of the pipeline. See example here: https://github.com/openshift/pipelines-tutorial
+The architect configures Tekton pipeline. The difference is the that many of the existing stacks in Codeready Workspaces can be built using existing source-2-image builders. The s2i step may be incorporated as part of the pipeline. See example here: https://github.com/openshift/pipelines-tutorial
 
 
 #### Usage Scenario for Developer
@@ -227,7 +236,7 @@ The developer creates a workspace in Codeready workspaces:
 - Login to Codeready Workspaces
 - Select one of the predefined stacks
 - Create a new workspace
-- Configure the credentials required to access Github `svc-a` repository
+- Configure the credentials required to access the Github `svc-a` repository
 - Create a new branch
 - Clone branch from Github
 
@@ -258,9 +267,9 @@ The following Github/GHE events may be configured to trigger a new run of the pi
 - Push: rebuild the repository up to the commits in the push.
 - Pull request: Rebuild upstream repository merged with the commits in the pull request.
 
-A new run may also be triggered on a timer. One example is an integration branch that is built every hour.
+A new run may also be triggered on a timer. One example is an integration branch that is built nightly.
 
-A new run may be triggered manually, for example, when manual action following approval is required to proceed to the next stage.
+A new run may be triggered manually, for example, when manual action following approval is required to proceed to the next stage, or for system or long run tests.
 
 A new run may be triggered when one or more dependent images changes. For example, an intermediate stage pipeline is triggered whenever one of its dependent images changes. The devops architect may define what is an `image change`. For example,
 - whenever the SHA for the `latest` tag changes
@@ -304,14 +313,53 @@ For Github and Github Enterprise:
 <a name="Functional_Specification"></a>
 ## Functional Specification
 
-How to find the URL and secret for the Kabanero Listener
+
+## Defaults
+
+- The default namespace for a build is the name of the repository, when the trigger is a change in the repository.
+- The default image name for a build (if only one image) is the name of the repository.
+- The default behavior for a pull request is:
+  - Find a matching pipeline
+  - If matching pipeline if Tekton,
+      - Generate required Tekon resources.
+      - Call the pipeline
+
+
+## Matching a repository to a pipeline:
+
+- Explicit configuration: mapping from repository URL to pipeline. **TBD: how to account for differences in source code extraction between pull request and push?**
+- Introspection: determine the programming model used by the resource, and find a matching pipeline, if the choice is unique.
+   - appsody .yaml file may be used to match labels in pipelines.
+      - will match explicit version, followed by higher version. 
+   - **TBD:** If not using appsody, a special marker file indicating the programming model
+   - **TBD:** Introspect pom.xml, source code, to find the closest match.
+
+## Matching an image to a pipeline
+
+Image change Triggers:
+- A new SHA is available for a given tag, for example, `latest`
+- A new tag or a new SHA is available, where the tag is matched following a a pattern matching rule, for example, `1.0.0.0`.
+
+Matching image change to a pipeline:
+- Explicit configuration: mapping from image name to pipeline name
+
+## Configuring webhook
+
+The URL for the webhook listener is:
+  - for `github` and github compatible webhooks: `Kabanero URL`/webhook/github
+
+The secret to be used for the webhook is automatically generated, and stored in a ConfigMap during installation of Kabanero. 
+
+ 
 
 <a name="List_Events"></a>
+
 ## List of Events
 
 ### Topic: Pipeline
 
 The name of the topic is "Pipeline"
+
 The attributes are:
 - pipelineType: the type of pipeline, currently only `Tekton`
 - action: action performed, one of:
@@ -320,8 +368,8 @@ The attributes are:
   - `deleted`: a run has been deleted.
   - `statusUpdate`: The status of a run has changed.
 - name: the name of the run, should be a Kubernetes resource name. 
-  - For Tekton, it's the name of the run.
-- actionDetails: pipeline independent details related to an action
+  - For Tekton, it's the name of the pipeline run.
+- details: pipeline independent details related to an action
    - for action == `started`, what triggered the new run:
      - manual: manual trigger + who triggered it.
      - repository: details of change to the repository
@@ -334,7 +382,8 @@ The attributes are:
        - for example, garbage collection
    - for action == `statusUpdate`:
        - **TBD**: pipeline neutral status update??
-- details: pipeline specific details.
+
+**TBD:** Kabanero emitted events, such as how it matches repository to a pipeilne.
 
 ### Topic: SourceRepository
 
@@ -354,14 +403,12 @@ Currently, these are supported:
 
 **TBD:** Still need to work out the details.
 The name of the topic is "ImageRpository". The attributes of the event are:
-- repositoryType: type of image repository
-- repositoryLocation  location of the repository
-- imageName: name of the image
+- repositoryType: type of image repository. Currently `docker`.
 - eventName: name of the event
+      - `tagged`: an image has been tagged
+      - `pushed`: new image has been pushed.
+      - `updated`: Image updated with a new SHA
+- repositoryLocation  location of the image
+- imageName: name of the image
 - eventData: The actual JSON object associated with the event, or a mapping of the original data to JSON if the original data is not JSON
-
-Supported repositoryType: `Docker`
-
-Supported eventName: 
- - `tag`: an image has been tagged.
- - `push`: An image has been pushed.
+    - for docker, at least SHA for the image.
