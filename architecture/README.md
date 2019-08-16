@@ -348,7 +348,7 @@ Matching image change to a pipeline:
 The URL for the webhook listener is:
   - for `github` and github compatible webhooks: `Kabanero URL`/webhook/github
 
-The secret to be used for the webhook is automatically generated, and stored in a ConfigMap during installation of Kabanero. 
+The secret to be used for the webhook is automatically generated, and stored in a Kubernetes Secret during installation of Kabanero. 
 
  
 
