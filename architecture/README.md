@@ -79,7 +79,7 @@ In order to ensure the design is extensible,  the remainder of this document cov
 <a name="Usage_Scenarios"></a>
 ## Usage Scenarios
 
-This section captures the usage scenarios, from which we can derive the event types, and producers and consumers of events. We begin with a sample production environment consisting of 3 different applications/services. This is followed by discussion on the devops pipeline that produces the production environment.
+This section captures the usage scenarios, from which we can derive the functional specification. We begin with a sample production environment consisting of 3 different applications/services. This is followed by discussion on the devops pipeline that produces the production environment. Note that the usage scenarios presented in this section are not recommendations. They are meant to capture a variety of scenarios to ensure the functional specification is sufficiently useful.
 
 ### The Production Environment
 
@@ -95,7 +95,7 @@ The third and final application is a microservice svc-b. It is deployed in the n
 
 ### Usage Scenarios for ui
 
-The `UI` application example is meant as a continuous deployment sample, where code in the `master` branch is always ready to deploy. It follows a true cloud-native development process:
+The `UI` application example is meant as a continuous deployment sample, where code in the `master` branch is always ready to deploy, and for this example, always deployed immediately. It follows a true cloud-native development process:
 -  It uses Github or Github Enterprise as the source repository.  
 - It uses the Github branching strategy:
   - Developers are required to create branches for all source code changes.
@@ -105,7 +105,7 @@ The `UI` application example is meant as a continuous deployment sample, where c
 - A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is not allowed to merge code without code review and successful test build. 
 - The test build also runs automated tests.
 - Developers use Appsody on their local machines as development environment.
-- Additional manual exploratory testing may be performed with the latest application deployed to the `ui-test` namespace.
+- Builds from the `master` branch are automatically triggered when a Pull Request is merged into the `master` branch. If successfully, the new image is automatically deployed to production.
 
 
 The pipeline is shown below:
@@ -120,9 +120,9 @@ For the `ui` application, the developers use appsody as their local development 
 The architect creates the Tekton Pipeline and Tasks for the `ui` application. This involves:
 - Using any existing pipelines and tasks that may already be available for building node.js applications as the basis to create a new pipeline.
 - Using any existing pipeline tasks for interacting with Github:
-  - When build is kicked off, update the Github status check with a warning that build is on-going, to prevent the user from merging code. (**TBD**: Is this part of Tekton or Kabanero?)
-  - When build is successful,  Pipeline Tasks are used to install `ui-test`, `ui`, `svc-a` and `svc-b` images, and run the `ui-test` verification test.
-- The last task of the pipeline is to record the github status and how to access the build. (**TBD:** Is this possible with Tekton, or is this handled by Kabanero?)
+  - When build is kicked off, update the Github status check with a warning that build is on-going, to prevent the user from merging code. 
+  - When build is successful,  additional Pipeline Tasks are used to install `ui-test`, `ui`, `svc-a` and `svc-b` images, and run the `ui-test` verification test.
+- The last step of the pipeline is to record the github status and how to access the build. 
    - successful if all tasks succeed.
    - fail if some tasks fails
 
@@ -144,12 +144,11 @@ The architect configures Kabanero what actions to take for pull request on an `u
   - Option to Record Github status check for test build.
 - Output: Docker
   - image location
-**TBD**: Come up with reasonable defaults.
 
-**TBD**: It seems that official deployment from `master` requires a new build from `master`. This does not detract from the discussion, but we do need to add these to the workflow:
-- A new commit into `master` triggers a new build. In theory, this build should succeed. 
-- The new image is tagged.
-- This triggers the pipeline for `ui-test` to run, deploying the new image.
+The architect provides a second pipeline for building from the `master` branch. This pipeline is required to build the official image for production.
+- The trigger for the pipeline is a new commit to `master` branch.
+- If the build is successful, the new image is tagged as `latest`.
+- The image is automatically deployed to production once tagged.
 
 
 #### Usage Scenario for Developer
@@ -157,7 +156,9 @@ The architect configures Kabanero what actions to take for pull request on an `u
 Prerequisites for the Developers:
 - Developer installs Kabanero Client to local laptop/desktop
 - Developer installs Appsody on laptop/desktop.  (**TBD**: Is this a special version that knows where the standardized stacks are, or will it go to Kabanero to get the location)
-- For local testing, either there are stubs for svc-a and svc-b, or a working svc-a and svc-b service for local testing has been set up and made available for developers, or it is re-deployed for each new run of the build. (Which choice to pick is outside the scope of this document.)
+- For local testing, the example shows re-deployment of svc-a and svc-b for every build. Other options are possible:
+  - Use of stubs for svc-a and svc-b, 
+  - or a working svc-a and svc-b service for local testing has been set up and made available for developers
 
 The developer sets up a new environment for `ui` development as follows:
 - Developer creates a branch and clones the branch into local environment.
@@ -191,6 +192,9 @@ A built-in SourceRepository consumer listens for events on the SourceRepository 
 - **TBD**:  resource management:
    - Number of concurrent runs
    - Garbage collection to remove old runs.
+
+When code is merged into `master`, The Kabanero listener posts a Github Push event to the SoruceRepository topic. (**TBD**: or is it a variation of the PullRequest event?)
+- A new run of the pipeline is started
 
 ### Usage Scenarios for svc-a
 
