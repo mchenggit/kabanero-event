@@ -203,12 +203,12 @@ When code is merged into `master`, The Kabanero listener posts a Github Push eve
 The second application, `svc-a`,  is meant to capture a more complex workflow for continuous delivery. In this workflow, code is delivered continuously. However, unlike the `ui` application, it is not continuously deployed to production.  It uses a branching strategy similar to `Git flow`.
 - It was developed using Openshift Codeready Workspaces
 - It uses Github or Github Enterprise as the source repository.  
-- Developers are required to create branches or forks from `develop` branch for all source code changes.
+- Developers are required to create branches or forks from `develop` branch for all source code changes. There may be many such branches, such as having a separate branch per feature or defect.
 - A pull request requires the following status checks before code may be merged to `develop` branch:
    - code review 
    - test build 
 - A test build is triggered automatically for each pull request, and whenever a new commit is added to the pull request. Developer is not allowed to merge code without code review and successful test build.
-- A test build from the `develop` branch is kicked off from a timer and additional tests run to ensure the quality of the code.  For example, hourly or nightly. (Note: this is now yet shown in the diagram.) 
+- A test build from the `develop` branch is kicked off from a timer and additional tests run to ensure the quality of the code.  For example, hourly or nightly. (Note: this is not yet shown in the diagram.) 
 - Code is not merge to `master` branch from `develop` branch until it is ready for the next release, after system test.
 - Code merged into `master` is tagged with version number, such as 1.0.0. 
 - The pipeline to the system test is triggered manually for specific commits built from `develop`.
@@ -229,9 +229,9 @@ For the `svc-a` application, the architect is responsible for creating the Kaban
 - How to ensure Eclipse che/Codeready Workspaces only pick up standardized stacks
 - Do we want to prevent developers from creating their own stack?
 
-The architect configures Github in the same way as for `ui` application. The main difference is the creation of `develop` integration branch.
+The architect configures Github in the same way as for `ui` application. The main difference is the creation of `develop` integration branch. Developers may create their own feature or defect forks or branches.
 
-The architect configures Tekton pipeline. The difference is the that many of the existing stacks in Codeready Workspaces can be built using existing source-2-image builders. The s2i step may be incorporated as part of the pipeline. See example here: https://github.com/openshift/pipelines-tutorial
+The architect configures Tekton pipelines. The main difference is that there are additional pipeline for builds from `develop` branch, and for system test. Another difference is that many of the existing stacks in Codeready Workspaces can be built using existing source-2-image builders. The s2i step may be incorporated as part of the pipeline. See example here: https://github.com/openshift/pipelines-tutorial
 
 
 #### Usage Scenario for Developer
@@ -244,7 +244,7 @@ The developer creates a workspace in Codeready workspaces:
 - Create a new branch
 - Clone branch from Github
 
-The developer code/debug inner loo:
+The developer code/debug inner loop:
 - Make local code changes directly in Eclipse che
 - Run unit test and debugs directly in Eclipse Che
 - Push changes  to branch one or more times
@@ -317,26 +317,99 @@ For Github and Github Enterprise:
 <a name="Functional_Specification"></a>
 ## Functional Specification
 
-
-## Defaults
-
-- The default namespace for a build is the name of the repository, when the trigger is a change in the repository.
-- The default image name for a build (if only one image) is the name of the repository.
-- The default behavior for a pull request is:
-  - Find a matching pipeline
-  - If matching pipeline is Tekton,
-      - Generate required Tekton resources.
-      - Call the pipeline
-
-
 ## Matching a repository to a pipeline:
 
-- Explicit configuration: mapping from repository URL to pipeline. **TBD: how to account for differences in source code extraction between pull request and push?**
-- Introspection: determine the programming model used by the resource, and find a matching pipeline, if the choice is unique.
-   - appsody .yaml file may be used to match labels in pipelines.
-      - will match explicit version, followed by higher version. 
-   - **TBD:** If not using appsody, a special marker file indicating the programming model
-   - **TBD:** Introspect pom.xml, source code, to find the closest match.
+A pipeline used in a Kabanero build must define one or more input repositories, and one one more output images. Currently only Tekton pipeline is supported.
+
+### Tekton build Pipeline
+
+A Tekton build pipeline must define:
+- one input resource for a repository. Currently only resource of type `git` is supported.
+- One output resources. Currently only resources of type `image` is supported.
+
+Here is an example of a Tekton pipeline with one input resource to a `git` repository, and one output resource as a docker `image`:
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: Pipeline
+metadata:
+  name: test-pipeline
+  labels:
+    kabanero.io/stack: "appsody-java-microprofile:0.2.2"
+  namespace: kabanero
+spec:
+  resources:
+  - name: git-source
+    type: git
+  - name: docker-image
+    type: image
+  tasks:
+  - name: appsody-build
+    params:
+    - name: appsody-deploy-file-name
+      value: appsody-service.yaml
+    resources:
+      inputs:
+      - name: git-source
+        resource: git-source
+      outputs:
+      - name: docker-image
+        resource: docker-image
+    taskRef:
+      name: appsody-build-task``
+```
+
+### Requirements for a Github Repository 
+
+To match a github repository to a Tekton pipeline, the base directory must contain either
+- `.appsody.yaml` for appsody projects, or
+- `.kabanero.yaml` for non-appsody projects
+
+If both files exist, the .kabanoer.yaml file takes precedence over .appsody.yaml file. The required yaml file must contain:
+
+```
+stack: <name of stack>
+```
+For example, 
+```
+stack: appsody/java-microprofile:0.2.2
+```
+
+Another example:
+```
+stack: che/jboss-eap:7.2
+```
+
+### Starting a new Pipeline Run 
+
+When a `Push` or `Pull Request` event is triggered in Github, or when a manual run is initiated, the value of the stack stored in `.kabanero.yaml` or `.appsody.yaml` is used to find those pipelines with matching values for the label `kabanero.io/stack`. Note that for a correct match, the character `/` in the value of a stack is first substituted with `-` because `/`  is now a valid label value in Kubernetes. 
+- If only one match is found, the pipeline is used for a new run.
+- If more than one match is found, then the pipeline that is most recently modified is used.
+- If no match is found, then a event is emitted in the Pipeline namespace with error message.
+
+The following additional parameters are used:
+- The namespace (project) for the pipeline run is <name of repository>-build
+- The name of the output image is the internal openshift image stream located at <namespace>/<name of repository>:latest
+- the name of the new pipeline run contains a new ordinal number to distinguish the new run from the rest of the runs.
+
+For example, if the name of the repository is `github.com/user/hello-world`:
+- The project for the pipeline run is `hello-world-build`
+- The name of the output image is: hello-world-build/hello-world
+
+**TBD**: can a pipeline support more than one stack? In theory yes, but Kubernetes only allows 63 characters in the value of a label:
+- Need to define additional labels. But this will make it more difficult to search which pipeline supports which stack.
+
+### Starting a Manual Run
+
+To start a manual run, create a new kabanero custom resource for a run, specifying:
+- name of the run.
+- URL of the the repository  or pull request
+
+**TBD:** Specification of the CRD
+
+### Overriding defaults
+
+**TBD:** Overriding Defaults
 
 ## Matching an image to a pipeline
 
