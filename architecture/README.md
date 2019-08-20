@@ -352,10 +352,6 @@ Finally, changes in the pipeline definitions and the resources that the pipeline
 
 ## Defining PipelineResourceMapping
 
-A pipeline may contain:
-- one or more input resources
-- zero or more output resources.
-
 The following is an example of a Tekton pipeline with two input resources, and two output resource. 
 - The input resources include:
   - A `git` resource repository
@@ -400,7 +396,7 @@ spec:
       name: appsody-build-task``
 ```
 
-Here is a sample mapping:
+Here is a sample mapping of the above pipeline to concreate resources:
 
 ```
 apiVersion: kabanero.io/v1alpha1
@@ -413,33 +409,106 @@ spec:
     pipeline-name: "test-pipeline"
     resources:
     - name: git-source
-      url:  https://github.ibm.com/mcheng/ui
-      triggerEvents: "Push, PullRequest"
+      - repository:  https://github.ibm.com/user/ui
     - name: dependent-source
-      url:  <registry>/ui-dev/service-a
-      triggerTags: "[0-9]+.[0-9]+.[0-9]+.[0-9]+, latest"
+      image:  <registry>/ui-dev/service-a
     - name: application-image
-      url: mydocker/ui-dev/ui
-      promotion: 
-      - registry: "<registry>/ui-test"
-      - resistry: "resistry>/ui-integration"
+      - image: <registry>/ui-dev/ui
+      - promotion: 
+        - image: "<registry>/ui-test/ui"
+        - image: "<resistry>/ui-integration/ui"
     - name: test-image
-      url: mydocker/ui-dev/ui-test:latest
+      image: <registry>/ui-dev/ui-test
 ```
 
 Note:
-- `pipeine-kind`  and `pipeline-name` identifies the specific pipeline for which we are creating a mapping.
+- The namespace of the mapping is `ui-dev`, and this is the namespace where all the resources will be created.
+- `pipeline-kind`  and `pipeline-name` identify the specific pipeline for which we are creating resource mappings.  The default `pipeline-kind` is `Pipeline`.
 - the `reousrces` section lists the mapping for each input and output resources in the pipeline.  Our pipeline contains 2 input and 2 output resources:
   - For the input resource `git-source`, the mapping specifies:
-     - the `url` of the git repository
-     - the events that will trigger a new build:
-       - `Push` : a Push to the repository 
-       - `PullRequest`: A pull request is created in the repository
+     - the `repository` of the git repository. Note that this pipeline will apply to all branches.
+     - By default, the events that will trigger a new build are `Push` and `Pull Request`.
   - For the input resource `dependent-source`,
      - the `url` identifies the docker image to be used 
-     - the  `triggerTags` identifies which tags of the image will trigger a a new run, if the image is updated.  For our case, any change to the image tagged "latest", or with a tag that is a version number, will trigger a new run
-  - For hte output resource application-image
-    - The `url` identifies where the image will be stored. The tag `latest` will be used, unless it is .
+     - the  `triggerTags` identifies which tags of the image will trigger a a new run, if the image is updated.  For our case, any change to the image tagged "latest", will trigger a new run
+  - For the output resource application-image
+    - The `image` identifies where the image will be stored. The tag `latest` will be used.
+
+The above example only uses images with tags `latest`. It is OK for continuous deployment environment, but not for one that needs to produce and support different version. As an example, say that product version 1.0.0.1 is being developed at a branch named `1.0.0.1`, and has two different pipeline:
+- A PullRequest just requires a test build with minimal testing
+- Separate nightly build is kicked off and more complex tests are run in a different pipeline.
+
+The PipelineReosurceMapping for the Pull Request may look like:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: PipelineResourcesMapping
+metadata:
+    name: ui-dev-1.0.0.1-p4
+    namespace: ui-dev
+spec:
+    release: "1.0.0.1-pr"
+    pipeline-kind: "Pipeline"
+    pipeline-name: "test-pipeline"
+    resources:
+    - name: git-source
+      repository:  https://github.ibm.com/user/ui
+      - branches
+        - branch: 1.0.0.1
+      triggers: 
+      - event: "Pull Request"
+    - name: dependent-source
+      - image:  <registry>/ui-dev/service-a
+      - tag: "0.0.0.[0-9]+"
+    - name: application-image
+      - image: <registry>/ui-dev/ui
+    - name: test-image
+      image: <registry>/ui-dev/ui-test
+```
+Note that;
+- The name of the resource mapping is `ui-dev-1.0.0.1-pr` to distinguish it from previous mapping for the `maste` branch.
+- The release is `1.0.0.1-pr`. The release is used to tag all output images.
+- The branch `1.0.0.1` source repository is used to restrict the this mapping to only the `1.0.0.1` branch .
+- The  release is `1.0.0.1.1-pr`, and is used to tag all output images.
+- A tag may be used to pick up only specific versions of a dependent image.
+
+
+The PipelineResourceMapping for the nightly build may look like:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: PipelineResourcesMapping
+metadata:
+    name: ui-dev-1.0.0.1
+    namespace: ui-dev
+spec:
+    release: "1.0.0.1"
+    pipeline-kind: "Pipeline"
+    pipeline-name: "test-pipeline"
+    repeat:
+       - start-time: "18:00:00"
+       - interval: 24h
+    resources:
+    - name: git-source
+      repository:  https://github.ibm.com/user/ui
+      - branches:
+        - branch: 1.0.0.1
+    - name: dependent-source
+      - image:  <registry>/ui-dev/service-a
+      - tag: "0.0.0.[0-9]+"
+    - name: application-image
+      - image: <registry>/ui-dev/ui
+      - promotion: 
+        - image: "<registry>/ui-test/ui"
+    - name: test-image
+      image: <registry>/ui-dev/ui-test
+```
+
+Note that once the image is promoted to the ui-test project, it will trigger another pipeline to run.  Here is an example pipeline for the test stage:
+
+
+
+**TBD**: How to set status back to PR status_check for builds
 
 ### Matching a repository to a Build pipeline
 
