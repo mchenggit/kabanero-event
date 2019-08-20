@@ -317,17 +317,50 @@ For Github and Github Enterprise:
 <a name="Functional_Specification"></a>
 ## Functional Specification
 
-## Matching a repository to a pipeline:
+In this section, we will present:
+- How to configure the resources for a pipeline 
+- How to to set up both organizational and per-repository webhooks.
 
-A pipeline used in a Kabanero build must define one or more input repositories, and one one more output images. Currently only Tekton pipeline is supported.
+We will limit the design to only what Kabanero currently supports:
+- Github for source control
+- Tekton for pipeline 
+- Openshift internal docker registry 
 
-### Tekton build Pipeline
 
-A Tekton build pipeline must define:
-- one input resource for a repository. Currently only resource of type `git` is supported.
-- One output resources. Currently only resources of type `image` is supported.
+## Pipeline Resource Mappings
 
-Here is an example of a Tekton pipeline with one input resource to a `git` repository, and one output resource as a docker `image`:
+A pipeline may define input and output resources. Supported input resources include:
+- A github repository
+- A docker image
+
+A docker image is currently the only Supported output resources.
+
+A PipelineResourceMapping custom resource definition is used to map a pipeline to specific input resources. This enables a run to take place whenever the input resources change, or when the run is initiated manually.
+
+## triggers for a Pipeline run
+
+A new run of a pipeline is initiated only when triggered. The trigger may be a change to the input resource. For input resource, supported triggers include:
+- For source repository: a Push or Pull Request event.
+- For docker image:
+  - an image is updated
+  - a new tag matching a specific pattern is created.
+
+A new run may be triggered manually, such as one initiated by an administrator.
+
+Finally, changes in the pipeline definitions and the resources that the pipelines depend on may also trigger a new run.
+
+
+## Defining PipelineResourceMapping
+
+A pipeline may contain:
+- one or more input resources
+- zero or more output resources.
+
+The following is an example of a Tekton pipeline with two input resources, and two output resource. 
+- The input resources include:
+  - A `git` resource repository
+  - A dependent docker image
+- The output resources are two docker images, one for the application, and the other for testing.
 
 ```
 apiVersion: tekton.dev/v1alpha1
@@ -341,7 +374,11 @@ spec:
   resources:
   - name: git-source
     type: git
-  - name: docker-image
+  - name: dependent-source
+    type: image
+  - name: application-image
+    type: image
+  - name: test-image
     type: image
   tasks:
   - name: appsody-build
@@ -352,12 +389,61 @@ spec:
       inputs:
       - name: git-source
         resource: git-source
+      - name: dependent-source
+        resource: dependent-source
       outputs:
-      - name: docker-image
-        resource: docker-image
+      - name: application-image
+        resource: application-image
+      - name: test-image
+        resource: test-image
     taskRef:
       name: appsody-build-task``
 ```
+
+Here is a sample mapping:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: PipelineResourcesMapping
+metadata:
+    name: ui-dev
+    namespace: ui-dev
+spec:
+    pipeline-kind: "Pipeline"
+    pipeline-name: "test-pipeline"
+    resources:
+    - name: git-source
+      url:  https://github.ibm.com/mcheng/ui
+      triggerEvents: "Push, PullRequest"
+    - name: dependent-source
+      url:  <registry>/ui-dev/service-a
+      triggerTags: "[0-9]+.[0-9]+.[0-9]+.[0-9]+, latest"
+    - name: application-image
+      url: mydocker/ui-dev/ui
+      promotion: 
+      - registry: "<registry>/ui-test"
+      - resistry: "resistry>/ui-integration"
+    - name: test-image
+      url: mydocker/ui-dev/ui-test:latest
+```
+
+Note:
+- `pipeine-kind`  and `pipeline-name` identifies the specific pipeline for which we are creating a mapping.
+- the `reousrces` section lists the mapping for each input and output resources in the pipeline.  Our pipeline contains 2 input and 2 output resources:
+  - For the input resource `git-source`, the mapping specifies:
+     - the `url` of the git repository
+     - the events that will trigger a new build:
+       - `Push` : a Push to the repository 
+       - `PullRequest`: A pull request is created in the repository
+  - For the input resource `dependent-source`,
+     - the `url` identifies the docker image to be used 
+     - the  `triggerTags` identifies which tags of the image will trigger a a new run, if the image is updated.  For our case, any change to the image tagged "latest", or with a tag that is a version number, will trigger a new run
+  - For hte output resource application-image
+    - The `url` identifies where the image will be stored. The tag `latest` will be used, unless it is .
+
+### Matching a repository to a Build pipeline
+
+
 
 ### Requirements for a Github Repository 
 
