@@ -127,15 +127,13 @@ The architect creates the Tekton Pipeline and Tasks for the `ui` application. Th
    - fail if some tasks fails
 
 For the source repository, the architect:
-- Creates the Github organizational functional IDs and webhook following instructions at: https://help.github.com/en/articles/configuring-webhooks-for-organization-events-in-your-enterprise-account.
-  - Finds the Kabanero Github event listener URL and secret to receive Github events: **TBD**: how to find the URL and secret. 
+- Creates the Github organizational functional IDs and webhook 
+  - Finds the Kabanero Github event listener URL and secret to receive Github events: 
   - The Github events to be received are:
       - Pull Requests
 - Creates the Kuberentes secrets required to access the repositories in the organization, depending on what is supported by the build pipeline, and Github: https://developer.github.com/v3/guides/managing-deploy-keys/. 
 - Creates the `ui` repository under a Github organization. 
 - Authorizes developers by adding them as collaborators.
-
-Alternatively, for a small or personal project, per-repository webhook may be configured. The steps are essentially the same. The only difference is the the webhook is set up at the repository level rather than at organizational level.
 
 The architect configures Kabanero what actions to take for pull request on an `ui` repository:
 - Input: Github
@@ -318,14 +316,21 @@ For Github and Github Enterprise:
 ## Functional Specification
 
 In this section, we will present:
-- How to configure the resources for a pipeline 
 - How to to set up both organizational and per-repository webhooks.
+- How to map resources to pipelines 
+- How pipelines are triggered.
 
 We will limit the design to only what Kabanero currently supports:
 - Github for source control
 - Tekton for pipeline 
 - Openshift internal docker registry 
 
+## Configuring Webhooks
+
+A github organizational webhook enables the administrator to configure the webhook just once for all repositories within the organization. Per-repository webhook is not required. The instructions are here: 
+https://help.github.com/en/articles/configuring-webhooks-for-organization-events-in-your-enterprise-account.
+
+Alternatively, a repository webhook may be configured for a private repository. The instructions are here: **TBD: get link**.
 
 ## Pipeline Resource Mappings
 
@@ -335,7 +340,7 @@ A pipeline may define input and output resources. Supported input resources incl
 
 A docker image is currently the only Supported output resources.
 
-A PipelineResourceMapping custom resource definition is used to map a pipeline to specific input resources. This enables a run to take place whenever the input resources change, or when the run is initiated manually.
+Mapping pipelines to resources may be done implicitly for some scenarios, or a PipelineResourceMapping custom resource definition is used for more complex scenarios. 
 
 ## triggers for a Pipeline run
 
@@ -350,7 +355,101 @@ A new run may be triggered manually, such as one initiated by an administrator.
 Finally, changes in the pipeline definitions and the resources that the pipelines depend on may also trigger a new run.
 
 
-## Defining PipelineResourceMapping
+## Implicit Resource Mapping
+
+Implicit mapping allows resources to be mapped to input/output of pipelines with the least configuration. Pipeline runs may be triggered either automatically or manually. Currently, only the following scenario is supported:
+- The pipeline has only one input resource from a Github repository.
+- The content of the Github repository is suitable for the pipeline to process.
+- the pipeline has at most one output resource for a docker image.
+
+
+To enable implicit mapping of a github repository to a pipeline, the base directory of the repository must contain either
+- `.appsody.yaml` for appsody projects, or
+- `.kabanero.yaml` for non-appsody projects
+
+If both files exist, the .kabanero.yaml file takes precedence over .appsody.yaml file. The required yaml file must contain:
+
+```
+stack: <name of stack>
+```
+For example, 
+```
+stack: appsody/java-microprofile:0.2.2
+```
+Another example:
+```
+stack: jboss-eap:7.2
+```
+
+The pipeline itself must contain an annotation whose name is `kabanero.io/stacks`, and one of its values matches the stack declared in the repository. For example, the following pipeline:
+- Contains an anntoation whose name is `kabanerio.io/stacks`, and whose value is `apsody-java-microprofile-0.2.1, appsody-java-microprofile-0.2.2". One of its stacks matches the stack declared for the source repository.
+- Declares one input resource for Github repository.
+- Declares one output resource for docker image.
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: Pipeline
+metadata:
+  name: simple-pipeline
+  annotations: 
+    - kabanero.io/stacks: "appsody-java-microprofile:0.2.1, appsody-java-micorprofile:0.2.2"
+  namespace: kabanero
+spec:
+  resources:
+  - name: git-source
+    type: git
+  - name: application-image
+    type: image
+  tasks:
+  - name: appsody-build
+    params:
+    - name: appsody-deploy-file-name
+      value: appsody-service.yaml
+    resources:
+      inputs:
+      - name: git-source
+        resource: git-source
+      outputs:
+      - name: application-image
+        resource: application-image
+    taskRef:
+      name: appsody-build-task``
+```
+
+When a `Push` or `Pull Request` event is triggered in Github, or when a manual run is initiated, the value of the stack stored in `.kabanero.yaml` or `.appsody.yaml` is used to select pipelines with matching value for the annotation `kabanero.io/stacks`. 
+- If only one match is found, the pipeline is used for a new run.
+- Otherwise, an event is emitted with error message. **TBD: format of error message.**
+
+In addition:
+- The namespace (project) for the pipeline run is <name of repository>-build.  If the namespace does not exist, the run is not triggered, and an error event is emitted. **TBD: format of the event.**
+- The name of the output image is :
+  - For a Push request: the internal openshift image stream located at <namespace>/<name of repository>-`branch`.
+  - For a Pull Reqeust: the internal openshift image stream located at <namespace>/<name of repository>-`branch`-pr
+- the name of the new pipeline run is: 
+  - For a Push request:`<branch>-n`, where n is a number to distinguish it from previous runs.
+  - For a Pull request:`<branch>-pr-n`, where n is a number to distinguish it from previous runs.
+
+For example, if the name of the repository is `github.com/user/hello-world`, and the branches are `master` and `develop`:
+- The project for the pipeline run is `hello-world-build`
+- The name of the output image is:
+   - for a Pull request: `hello-world-build/hello-world-master-pr`, and `hello-world-build/hello-world-develop-pr`.
+   - For a Push: `hello-world-build/helo-world-master` and `hello-world-build/hello-world-develop`.
+- The name of the pipeline run:
+   - for a Pull Request: `master-pr-1`, and `develop-pr-1`.
+   - for a Push: `master-1`, and `develop-1`.
+
+
+By default, Kabanero limits the branches whose changes automatically triggers pipelines runs to: `master`, `develop`, and any branch whose name ends in `n.n.n`, or `n.n.n.n`. For example, 
+- release-1.0.1, or
+- 9.0.0.5
+
+**TBD: How to change default.**
+
+**TBD**:
+- Can promotion to next stage through tagging output image be implici?
+- Can triggering run of next stage be implicit?
+
+## Explicit Mapping using PipelineResourceMapping
 
 The following is an example of a Tekton pipeline with two input resources, and two output resource. 
 - The input resources include:
@@ -510,61 +609,32 @@ Note that once the image is promoted to the ui-test project, it will trigger ano
 
 **TBD**: How to set status back to PR status_check for builds
 
-### Matching a repository to a Build pipeline
-
-
-
-### Requirements for a Github Repository 
-
-To match a github repository to a Tekton pipeline, the base directory must contain either
-- `.appsody.yaml` for appsody projects, or
-- `.kabanero.yaml` for non-appsody projects
-
-If both files exist, the .kabanoer.yaml file takes precedence over .appsody.yaml file. The required yaml file must contain:
-
-```
-stack: <name of stack>
-```
-For example, 
-```
-stack: appsody/java-microprofile:0.2.2
-```
-
-Another example:
-```
-stack: che/jboss-eap:7.2
-```
-
-### Starting a new Pipeline Run 
-
-When a `Push` or `Pull Request` event is triggered in Github, or when a manual run is initiated, the value of the stack stored in `.kabanero.yaml` or `.appsody.yaml` is used to find those pipelines with matching values for the label `kabanero.io/stack`. Note that for a correct match, the character `/` in the value of a stack is first substituted with `-` because `/`  is now a valid label value in Kubernetes. 
-- If only one match is found, the pipeline is used for a new run.
-- If more than one match is found, then the pipeline that is most recently modified is used.
-- If no match is found, then a event is emitted in the Pipeline namespace with error message.
-
-The following additional parameters are used:
-- The namespace (project) for the pipeline run is <name of repository>-build
-- The name of the output image is the internal openshift image stream located at <namespace>/<name of repository>:latest
-- the name of the new pipeline run contains a new ordinal number to distinguish the new run from the rest of the runs.
-
-For example, if the name of the repository is `github.com/user/hello-world`:
-- The project for the pipeline run is `hello-world-build`
-- The name of the output image is: hello-world-build/hello-world
-
-**TBD**: can a pipeline support more than one stack? In theory yes, but Kubernetes only allows 63 characters in the value of a label:
-- Need to define additional labels. But this will make it more difficult to search which pipeline supports which stack.
 
 ### Starting a Manual Run
 
-To start a manual run, create a new kabanero custom resource for a run, specifying:
-- name of the run.
-- URL of the the repository  or pull request
+Manual run for implicit mapping requires the location of the repository and the branch:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: ManualPipelineRun
+metadata:
+    name: ui-dev-run-1
+    namespace: ui-build
+spec:
+  repository:  https://github.ibm.com/user/ui
+  branch: `master`
+```
 
-**TBD:** Specification of the CRD
+Manual run for explicit mapping requires the name of the PipelineResourceMapping:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: ManualPipelineRun
+metadata:
+    name: ui-dev-run-2
+    namespace: ui-build
+spec:
+  pipelineReourceMappingRef:  ui-dev-1.0.0.1
+```
 
-### Overriding defaults
-
-**TBD:** Overriding Defaults
 
 ## Matching an image to a pipeline
 
