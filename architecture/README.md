@@ -315,15 +315,158 @@ For Github and Github Enterprise:
 <a name="Functional_Specification"></a>
 ## Functional Specification
 
-In this section, we will present:
-- How to to set up both organizational and per-repository webhooks.
-- How to map resources to pipelines 
-- How pipelines are triggered.
-
-We will limit the design to only what Kabanero currently supports:
+In this section, we will cover the specification of how to create a multi-stage pipelines for a devops workflow.  We will limit the design to only what Kabanero currently supports:
 - Github for source control
 - Tekton for pipeline 
 - Openshift internal docker registry 
+
+
+## Design Requirements
+
+Below is an example of a multi-stage pipeline to illustrate the design requirements:
+![Multi-Stage Pipeline](PipelineStages.jpg)
+
+The requirements specify how the workflow is triggered, and order of execution of the different stages of the pipelines:
+- The workflow is divided into stages, where each stage is a different pipeline.
+- There is a single top level stage where the workflow is triggered initially. (For example, `build` stage ) The supported triggers include:
+  - Github events
+  - timer based
+  - manual trigger
+- Subsequent stages of the pipeline may only be triggered after the successful completion of dependent stage(s). The trigger may be automatic or manual. For example,
+   - the `qa` stage is triggered automatically after the `build` stage succeeds.
+   - The `staging` stage is triggered automatically after both the `qa` and `system` stages succeed.
+   - The `system` stage is triggered manually after successful completion of `build` stage.
+- Some stages may run concurrently, for example, the `qa` and `system` stages.
+
+
+Each stage of the pipeline has its own input and output resources. The specification allows for sharing of these resources where  required. For example, the resource requirements for the above workflow is shown below:
+
+![Resource Dependencies](PipelineResources.jpg)
+
+- The `build` stage:
+  -  uses an input resource that is a source repository containing the source code for service  `svc-a`. 
+  - Produces an output docker image `svc-a`.
+- All subsequent stages make use of the same docker image `svc-a` produced during the `build` stage, consistent with the notion of using an immutable image from build to production. 
+- The `system` stage depends on both the `svc-a` image, and on source repository `repo-sve`. This repository contains the source code for the tests that are to be compiled and run against the service `svc-a`. 
+
+## Sample Configuration
+
+A Custom Resource Definition is used to define the stages of the workflow.  For our example, it looks like:
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineWorkflow
+metadata:
+  name: svc-a
+  namespace: kabanero
+spec:
+  service : "svc-a"
+  stages:
+      - stage: 
+        name : build
+        namespace: svc-a-build
+        triggers:
+            cron: 
+                interval: "mm HH DD MM DW"
+                branches: 
+                    - branch: "master"
+                    - branch: "develop"
+            input: 
+                name: git-source
+                    - event: "Push"
+                    - includeBranches:
+                        - barnch: "master*"
+                        - branch: "develop*"
+                    - excludeBranches: 
+                        - branch: "masterful"
+        pipeline: 
+           name: appsody-bld
+           - input: 
+               name: git-source
+               repository: http://github.ibm.com/mcheng/svc-a
+           - output:
+               name: image
+               image: svc-a
+      - stage: 
+        name : qa
+        namespace: svc-a-qa
+        dependsOn: "stage"
+        - input:
+            name: test-image
+            image: test-a
+        - input:
+             name: application-image
+             stage: build
+             output: image
+      - stage: 
+        name : system
+        namespace: svc-a-system
+        dependsOn: "build"
+        autoTrigger: false
+        - input:
+            name: git-source
+            repository: https://github.ibm.com/mcheng/svt
+            branch: "master"
+      - stage: 
+        name : system
+        namespace: svc-a-staging
+        dependsOn: "qa, system"
+        - input:
+            name: svc-b-imge
+            image: svc-b
+        - input:
+             name: application-image
+             stage: build
+             output: image
+```
+
+Here is a pipeline just for PullRequest test builds:
+```
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineWorkflow
+metadata:
+  name: svc-a-pr
+  namespace: kabanero
+spec:
+  service : "svc-a"
+  stages:
+      - stage: 
+        name : build
+        namespace: svc-a-build
+        triggers:
+            input: 
+                name: git-source
+                    - event: "PullRequest"
+                    - includeBranches:
+                        - barnch: "master*"
+                        - branch: "develop*"
+        pipeline: 
+           name: appsody-bld-pr
+           - input: 
+               name: git-source
+               repository: http://github.ibm.com/mcheng/svc-a
+           - output:
+               name: image
+               image: svc-a
+```
+
+
+To initiate a new run manually, use the following custom resource:
+```
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineWorkflowRun
+metadata:
+  name: svc-a-run-1
+  namespace: kabanero
+spec:
+  workflow: svc-a
+  input: 
+      name: git-source
+      branch: "master"
+```
+
+**TBD:** Post condition for a stage:
+- Can enhance the design to allow post-conditions. For example, manually marking the stage as completed.
 
 ## Configuring Webhooks
 
@@ -332,327 +475,6 @@ https://help.github.com/en/articles/configuring-webhooks-for-organization-events
 
 Alternatively, a repository webhook may be configured for a private repository. The instructions are here: **TBD: get link**.
 
-## Pipeline Resource Mappings
-
-A pipeline may define input and output resources. Supported input resources include:
-- A github repository
-- A docker image
-
-A docker image is currently the only Supported output resources.
-
-Mapping pipelines to resources may be done implicitly for some scenarios, or a PipelineResourceMapping custom resource definition is used for more complex scenarios. 
-
-## triggers for a Pipeline run
-
-A new run of a pipeline is initiated only when triggered. The trigger may be a change to the input resource. For input resource, supported triggers include:
-- For source repository: a Push or Pull Request event.
-- For docker image:
-  - an image is updated
-  - a new tag matching a specific pattern is created.
-
-A new run may be triggered manually, such as one initiated by an administrator.
-
-Finally, changes in the pipeline definitions and the resources that the pipelines depend on may also trigger a new run.
-
-
-## Implicit Resource Mapping
-
-Implicit mapping allows resources to be mapped to input/output of pipelines with the least configuration. Pipeline runs may be triggered either automatically or manually. Currently, only the following scenario is supported:
-- The pipeline has only one input resource from a Github repository.
-- The content of the Github repository is suitable for the pipeline to process.
-- the pipeline has at most one output resource for a docker image.
-
-
-To enable implicit mapping of a github repository to a pipeline, the base directory of the repository must contain either
-- `.appsody.yaml` for appsody projects, or
-- `.kabanero.yaml` for non-appsody projects
-
-If both files exist, the .kabanero.yaml file takes precedence over .appsody.yaml file. The required yaml file must contain:
-
-```
-stack: <name of stack>
-```
-For example, 
-```
-stack: appsody/java-microprofile:0.2.2
-```
-Another example:
-```
-stack: jboss-eap:7.2
-```
-
-The pipeline itself must contain an annotation whose name is `kabanero.io/stacks`, and one of its values matches the stack declared in the repository. For example, the following pipeline:
-- Contains an anntoation whose name is `kabanerio.io/stacks`, and whose value is `apsody-java-microprofile-0.2.1, appsody-java-microprofile-0.2.2". One of its stacks matches the stack declared for the source repository.
-- Declares one input resource for Github repository.
-- Declares one output resource for docker image.
-
-```
-apiVersion: tekton.dev/v1alpha1
-kind: Pipeline
-metadata:
-  name: simple-pipeline
-  annotations: 
-    - kabanero.io/stacks: "appsody-java-microprofile:0.2.1, appsody-java-micorprofile:0.2.2"
-  namespace: kabanero
-spec:
-  resources:
-  - name: git-source
-    type: git
-  - name: application-image
-    type: image
-  tasks:
-  - name: appsody-build
-    params:
-    - name: appsody-deploy-file-name
-      value: appsody-service.yaml
-    resources:
-      inputs:
-      - name: git-source
-        resource: git-source
-      outputs:
-      - name: application-image
-        resource: application-image
-    taskRef:
-      name: appsody-build-task``
-```
-
-When a `Push` or `Pull Request` event is triggered in Github, or when a manual run is initiated, the value of the stack stored in `.kabanero.yaml` or `.appsody.yaml` is used to select pipelines with matching value for the annotation `kabanero.io/stacks`. 
-- If only one match is found, the pipeline is used for a new run.
-- Otherwise, an event is emitted with error message. **TBD: format of error message.**
-
-In addition:
-- The namespace (project) for the pipeline run is <name of repository>-build.  If the namespace does not exist, the run is not triggered, and an error event is emitted. **TBD: format of the event.**
-- The name of the output image is :
-  - For a Push request: the internal openshift image stream located at <namespace>/<name of repository>-`branch`.
-  - For a Pull Reqeust: the internal openshift image stream located at <namespace>/<name of repository>-`branch`-pr
-- the name of the new pipeline run is: 
-  - For a Push request:`<branch>-n`, where n is a number to distinguish it from previous runs.
-  - For a Pull request:`<branch>-pr-n`, where n is a number to distinguish it from previous runs.
-
-For example, if the name of the repository is `github.com/user/hello-world`, and the branches are `master` and `develop`:
-- The project for the pipeline run is `hello-world-build`
-- The name of the output image is:
-   - for a Pull request: `hello-world-build/hello-world-master-pr`, and `hello-world-build/hello-world-develop-pr`.
-   - For a Push: `hello-world-build/helo-world-master` and `hello-world-build/hello-world-develop`.
-- The name of the pipeline run:
-   - for a Pull Request: `master-pr-1`, and `develop-pr-1`.
-   - for a Push: `master-1`, and `develop-1`.
-
-
-By default, Kabanero limits the branches whose changes automatically triggers pipelines runs to: `master`, `develop`, and any branch whose name ends in `n.n.n`, or `n.n.n.n`. For example, 
-- release-1.0.1, or
-- 9.0.0.5
-
-**TBD: How to change default.**
-
-**TBD**:
-- Can promotion to next stage through tagging output image be implici?
-- Can triggering run of next stage be implicit?
-
-## Explicit Mapping using PipelineResourceMapping
-
-The following is an example of a Tekton pipeline with two input resources, and two output resource. 
-- The input resources include:
-  - A `git` resource repository
-  - A dependent docker image
-- The output resources are two docker images, one for the application, and the other for testing.
-
-```
-apiVersion: tekton.dev/v1alpha1
-kind: Pipeline
-metadata:
-  name: test-pipeline
-  labels:
-    kabanero.io/stack: "appsody-java-microprofile:0.2.2"
-  namespace: kabanero
-spec:
-  resources:
-  - name: git-source
-    type: git
-  - name: dependent-source
-    type: image
-  - name: application-image
-    type: image
-  - name: test-image
-    type: image
-  tasks:
-  - name: appsody-build
-    params:
-    - name: appsody-deploy-file-name
-      value: appsody-service.yaml
-    resources:
-      inputs:
-      - name: git-source
-        resource: git-source
-      - name: dependent-source
-        resource: dependent-source
-      outputs:
-      - name: application-image
-        resource: application-image
-      - name: test-image
-        resource: test-image
-    taskRef:
-      name: appsody-build-task``
-```
-
-Here is a sample mapping of the above pipeline to concreate resources:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: PipelineResourcesMapping
-metadata:
-    name: ui-dev
-    namespace: ui-dev
-spec:
-    pipeline-kind: "Pipeline"
-    pipeline-name: "test-pipeline"
-    resources:
-    - name: git-source
-      - repository:  https://github.ibm.com/user/ui
-    - name: dependent-source
-      image:  <registry>/ui-dev/service-a
-    - name: application-image
-      - image: <registry>/ui-dev/ui
-      - promotion: 
-        - image: "<registry>/ui-test/ui"
-        - image: "<resistry>/ui-integration/ui"
-    - name: test-image
-      image: <registry>/ui-dev/ui-test
-```
-
-Note:
-- The namespace of the mapping is `ui-dev`, and this is the namespace where all the resources will be created.
-- `pipeline-kind`  and `pipeline-name` identify the specific pipeline for which we are creating resource mappings.  The default `pipeline-kind` is `Pipeline`.
-- the `reousrces` section lists the mapping for each input and output resources in the pipeline.  Our pipeline contains 2 input and 2 output resources:
-  - For the input resource `git-source`, the mapping specifies:
-     - the `repository` of the git repository. Note that this pipeline will apply to all branches.
-     - By default, the events that will trigger a new build are `Push` and `Pull Request`.
-  - For the input resource `dependent-source`,
-     - the `url` identifies the docker image to be used 
-     - the  `triggerTags` identifies which tags of the image will trigger a a new run, if the image is updated.  For our case, any change to the image tagged "latest", will trigger a new run
-  - For the output resource application-image
-    - The `image` identifies where the image will be stored. The tag `latest` will be used.
-
-The above example only uses images with tags `latest`. It is OK for continuous deployment environment, but not for one that needs to produce and support different version. As an example, say that product version 1.0.0.1 is being developed at a branch named `1.0.0.1`, and has two different pipeline:
-- A PullRequest just requires a test build with minimal testing
-- Separate nightly build is kicked off and more complex tests are run in a different pipeline.
-
-The PipelineReosurceMapping for the Pull Request may look like:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: PipelineResourcesMapping
-metadata:
-    name: ui-dev-1.0.0.1-p4
-    namespace: ui-dev
-spec:
-    release: "1.0.0.1-pr"
-    pipeline-kind: "Pipeline"
-    pipeline-name: "test-pipeline"
-    resources:
-    - name: git-source
-      repository:  https://github.ibm.com/user/ui
-      - branches
-        - branch: 1.0.0.1
-      triggers: 
-      - event: "Pull Request"
-    - name: dependent-source
-      - image:  <registry>/ui-dev/service-a
-      - tag: "0.0.0.[0-9]+"
-    - name: application-image
-      - image: <registry>/ui-dev/ui
-    - name: test-image
-      image: <registry>/ui-dev/ui-test
-```
-Note that;
-- The name of the resource mapping is `ui-dev-1.0.0.1-pr` to distinguish it from previous mapping for the `maste` branch.
-- The release is `1.0.0.1-pr`. The release is used to tag all output images.
-- The branch `1.0.0.1` source repository is used to restrict the this mapping to only the `1.0.0.1` branch .
-- The  release is `1.0.0.1.1-pr`, and is used to tag all output images.
-- A tag may be used to pick up only specific versions of a dependent image.
-
-
-The PipelineResourceMapping for the nightly build may look like:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: PipelineResourcesMapping
-metadata:
-    name: ui-dev-1.0.0.1
-    namespace: ui-dev
-spec:
-    release: "1.0.0.1"
-    pipeline-kind: "Pipeline"
-    pipeline-name: "test-pipeline"
-    repeat:
-       - start-time: "18:00:00"
-       - interval: 24h
-    resources:
-    - name: git-source
-      repository:  https://github.ibm.com/user/ui
-      - branches:
-        - branch: 1.0.0.1
-    - name: dependent-source
-      - image:  <registry>/ui-dev/service-a
-      - tag: "0.0.0.[0-9]+"
-    - name: application-image
-      - image: <registry>/ui-dev/ui
-      - promotion: 
-        - image: "<registry>/ui-test/ui"
-    - name: test-image
-      image: <registry>/ui-dev/ui-test
-```
-
-Note that once the image is promoted to the ui-test project, it will trigger another pipeline to run.  Here is an example pipeline for the test stage:
-
-
-
-**TBD**: How to set status back to PR status_check for builds
-
-
-### Starting a Manual Run
-
-Manual run for implicit mapping requires the location of the repository and the branch:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: ManualPipelineRun
-metadata:
-    name: ui-dev-run-1
-    namespace: ui-build
-spec:
-  repository:  https://github.ibm.com/user/ui
-  branch: `master`
-```
-
-Manual run for explicit mapping requires the name of the PipelineResourceMapping:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: ManualPipelineRun
-metadata:
-    name: ui-dev-run-2
-    namespace: ui-build
-spec:
-  pipelineReourceMappingRef:  ui-dev-1.0.0.1
-```
-
-
-## Matching an image to a pipeline
-
-Image change Triggers:
-- A new SHA is available for a given tag, for example, `latest`
-- A new tag or a new SHA is available, where the tag is matched following a a pattern matching rule, for example, `1.0.0.0`.
-
-Matching image change to a pipeline:
-- Explicit configuration: mapping from image name to pipeline name
-
-## Configuring webhook
-
-The URL for the webhook listener is:
-  - for `github` and github compatible webhooks: `Kabanero URL`/webhook/github
-
-The secret to be used for the webhook is automatically generated, and stored in a Kubernetes Secret during installation of Kabanero. 
-
- 
 
 <a name="List_Events"></a>
 
