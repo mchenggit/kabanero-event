@@ -315,10 +315,10 @@ For Github and Github Enterprise:
 <a name="Functional_Specification"></a>
 ## Functional Specification
 
-In this section, we will cover the specification of how to create a multi-stage pipelines for a devops workflow.  We will limit the design to only what Kabanero currently supports:
+In this section, we will cover the specification of how to create multi-stage pipelines for a devops workflow.  We will limit the design to only what Kabanero currently supports:
 - Github for source control
 - Tekton for pipeline 
-- Openshift internal docker registry 
+- docker registry 
 
 
 ## Design Requirements
@@ -344,10 +344,11 @@ Each stage of the pipeline has its own input and output resources. The specifica
 ![Resource Dependencies](PipelineResources.jpg)
 
 - The `build` stage:
-  -  uses an input resource that is a source repository containing the source code for service  `svc-a`. 
-  - Produces an output docker image `svc-a`.
-- All subsequent stages make use of the same docker image `svc-a` produced during the `build` stage, consistent with the notion of using an immutable image from build to production. 
-- The `system` stage depends on both the `svc-a` image, and on source repository `repo-sve`. This repository contains the source code for the tests that are to be compiled and run against the service `svc-a`. 
+  -  uses an input resource that is a source repository containing the source code for application `ui`. 
+  - Produces an output docker image `ui`.
+- All subsequent stages make use of the same docker image `ui` produced during the `build` stage, consistent with the notion of using an immutable image from build to production. 
+- The `system` stage depends on both the `ui` image, and on source repository `repo--ui-svt`. This repository contains the source code for the tests that are to be compiled and run against `ui`. 
+- The `staging` stage has an additional dependency on service `svc-b`
 
 ## Sample Configuration
 
@@ -391,8 +392,8 @@ spec:
 
 The declaration contains:
 - The pipeline for each stage
-- The dependencies between the sages
-- Which stage is triggered automatically, and which is not
+- The dependencies between the stages
+- Which stage is triggered automatically upon completion of dependent stages, and which is not
 - The connection of resources between stages.
 
 
@@ -405,6 +406,7 @@ metadata:
   name: ui-workflow
   namespace: kabanero
 spec:
+  workflow: nodejs-workflow-1.0
   service : "ui"
   - stage : build
       namespace: ui-build
@@ -427,7 +429,7 @@ spec:
   - stage : system
       - input:
          name: git-source
-         repository: https://github.ibm.com/mcheng/svt
+         repository: https://github.ibm.com/user/svt-ui
          branch: "master"
   - stage:  system
       - input:
@@ -444,7 +446,7 @@ Here is a one stage workflow just for test builds:
 apiVersion: tekton.dev/v1alpha1
 kind: KabaneroWorkflow
 metadata:
-  name: ui-pr
+  name: ui-test-build
   namespace: kabanero
 spec:
   - stage: build
@@ -459,9 +461,10 @@ metadata:
   name: ui-pr
   namespace: kabanero
 spec:
+  workflow: "ui-build"
   service : "ui-pr"
   - stage: build
-    namespace: ui-pr-build
+    namespace: ui-build
     - input: 
         name: git-source
         repository: http://github.ibm.com/user/ui
