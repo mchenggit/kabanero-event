@@ -491,7 +491,7 @@ metadata:
   name: ui-workflow-1 
   namespace: kabanero
 spec:
-  workflow: ui-workflow
+  workflowResources: ui-workflow
 ```
 
 The status of the run tracks the status of each stage. For example,
@@ -544,6 +544,85 @@ status:
 **TBD:** Post condition for a stage:
 - Can enhance the design to allow post-conditions. For example, manually marking the stage as completed.
 - Should marking status_check for a build be part of Tekton or Kabanero?
+
+### Improving Usability 
+
+To enable automatic matching of a repository to a KabaneroWorkflow without have to create KabaneroWorkflowResources, define the stacks supported the input of the first stage:
+```
+apiVersion: tekton.dev/v1alpha1
+kind: KabaneroWorkflow
+metadata:
+  name: nodejs-workflow-1.0
+  namespace: kabanero
+spec:
+  - stage : build
+    pipeline:  appsody-bld
+    -input: git-source
+     supportedStacks:
+       - appsody/nodejs-0.2.2.2
+  ```
+
+Automatic matching behaves as follows
+- a  repository contains a .appsody.yaml or a .kabanero.yaml matching exactly one stack in one KabaneroWorflow
+- The name of the branch is one that is enabled for automatic matching. The default branches are: "master", "develop", and any branch that ends in n.n.n.n or n.n.n.n.n.
+- All the input resource for all other than first stage can be derived automatically.
+- All output resources for all stages can be derived automatically.
+- The events from the repository are processed as follows:
+  - For a PullRequest, only the build stage is triggered.
+  - For a Push, all stages are potentially triggered, depending on whether prior stages completed successfully, and whether manual trigger is required.
+
+The automatically generated run looks like:
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: KabaneroWorkflowRun
+metadata:
+  name: ui-workflow-auto-1
+  namespace: ui-build
+spec:
+  workflow: nodejs-workflow-1.0
+  - input:
+      repositoryEvnet: "Push"
+      name: git-source
+      repository: https://github.ibm.com/user/HelloWorld
+      branch: master
+
+```
+
+For a KabaneroWorkflow, matching the output of a stage to input of another stage can be done automatically if:
+- The first stage has only one docker image output, and all subsequent stages have only one docker image input, and no other output from the stages they depend on.
+- The name of an output resource matches the name of an input resource in a subsequent stage.
+
+Can also consider defining an alias to reduce amount of typing when matching output of one stage to input of a subsequent stage. For example,
+```
+apiVersion: tekton.dev/v1alpha1
+kind: KabaneroWorkflow
+metadata:
+  name: nodejs-workflow-1.0
+  namespace: kabanero
+spec:
+  - stage : build
+    pipeline:  appsody-bld
+    - output: output-image
+      ailas :  imageAlias
+  - stage : qa
+    pipeline: qa-pipeline
+    dependentStages: 
+        - build
+    - inputAlias: imageAlias
+ - stage : system
+   dependentStages: 
+     - "build"
+     - "qa"
+   manualTrigger: true
+   - inputAlias: imageAlias
+- stage: system
+  dependentStages: 
+    - qa
+    - system
+  - inputAlias: imageAlias
+```
+
 
 ## Configuring Webhooks
 
