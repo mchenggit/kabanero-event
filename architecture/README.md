@@ -441,7 +441,7 @@ Note:
 - the default namespace is the name of the service followed by the name of the stage. For example, `ui-qa`.
 
 
-Here is a one stage workflow just for test builds:
+Here is another example, a one stage workflow just for test builds:
 ```
 apiVersion: tekton.dev/v1alpha1
 kind: KabaneroWorkflow
@@ -454,7 +454,7 @@ spec:
 ```
 
 And a realization of the workflow to do test builds on PullRequests only:
-
+```
 apiVersion: tekton.dev/v1alpha1
 kind: KabaneroWorkflowResources
 metadata:
@@ -523,9 +523,9 @@ metadata:
   name: ui-workflow-1 
   namespace: ui-build
   annotations:
-      - manualApproval: 
-          stage: system
-          approvedBy: user
+    - manualApproval: 
+        stage: system
+        approvedBy: user
 spec:
   workflow: ui-workflow
 status:
