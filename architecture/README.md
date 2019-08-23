@@ -326,7 +326,7 @@ In this section, we will cover the specification of how to create a multi-stage 
 Below is an example of a multi-stage pipeline to illustrate the design requirements:
 ![Multi-Stage Pipeline](PipelineStages.jpg)
 
-The requirements specify how the workflow is triggered, and order of execution of the different stages of the pipelines:
+The design requirements are:
 - The workflow is divided into stages, where each stage is a different pipeline.
 - There is a single top level stage where the workflow is triggered initially. (For example, `build` stage ) The supported triggers include:
   - Github events
@@ -351,122 +351,196 @@ Each stage of the pipeline has its own input and output resources. The specifica
 
 ## Sample Configuration
 
-A Custom Resource Definition is used to define the stages of the workflow.  For our example, it looks like:
+A Custom Resource Definition KabneroWorkflow is used to define the stages of a devops workflow, independent of the input resources, and the internal resource usage between the different pipelines.  For our example, it looks like:
 
 ```
 apiVersion: tekton.dev/v1alpha1
-kind: PipelineWorkflow
+kind: KabaneroWorkflow
 metadata:
-  name: svc-a
+  name: nodejs-workflow-1.0
   namespace: kabanero
 spec:
-  service : "svc-a"
-  stages:
-      - stage: 
-        name : build
-        namespace: svc-a-build
-        triggers:
-            cron: 
+  - stage : build
+    pipeline:  appsody-bld
+  - stage : qa
+    pipeline: qa-pipeline
+    dependentStages: 
+        - build
+    - inputRef:
+      name: application-image
+      fromStage: build
+      fromResource: image
+ - stage : system
+   dependentStages: 
+     - "build"
+     - "qa"
+   manualTrigger: true
+   - inputRef:
+       name: application-image
+       fromStage: build
+       fromResource: image
+- stage: system
+  dependentStages: 
+    - qa
+    - system
+  - inputRef:
+    name: application-image
+    fromStage: build
+    fromResource: image
+```
+
+The declaration contains:
+- The pipeline for each stage
+- The dependencies between the sages
+- Which stage is triggered automatically, and which is not
+- The connection of resources between stages.
+
+
+Here is a realization of the workflow for ui to build `master` or `develope` branch based on timer:
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: KabaneroWorkflowResources
+metadata:
+  name: ui-workflow
+  namespace: kabanero
+spec:
+  service : "ui"
+  - stage : build
+      namespace: ui-build
+      - input: 
+          name: git-source
+          repository: http://github.ibm.com/user/ui
+          triggers:
+              - type: cron
                 interval: "mm HH DD MM DW"
-                branches: 
-                    - branch: "master"
-                    - branch: "develop"
-            input: 
-                name: git-source
-                    - event: "Push"
-                    - includeBranches:
-                        - barnch: "master*"
-                        - branch: "develop*"
-                    - excludeBranches: 
-                        - branch: "masterful"
-        pipeline: 
-           name: appsody-bld
-           - input: 
-               name: git-source
-               repository: http://github.ibm.com/mcheng/svc-a
-           - output:
-               name: image
-               image: svc-a
-      - stage: 
-        name : qa
-        namespace: svc-a-qa
-        dependsOn: "stage"
-        - input:
-            name: test-image
-            image: test-a
-        - input:
-             name: application-image
-             stage: build
-             output: image
-      - stage: 
-        name : system
-        namespace: svc-a-system
-        dependsOn: "build"
-        autoTrigger: false
-        - input:
-            name: git-source
-            repository: https://github.ibm.com/mcheng/svt
-            branch: "master"
-      - stage: 
-        name : system
-        namespace: svc-a-staging
-        dependsOn: "qa, system"
-        - input:
-            name: svc-b-imge
-            image: svc-b
-        - input:
-             name: application-image
-             stage: build
-             output: image
+                branches:
+                    - "master"
+                    - "develop"
+       - output:
+           name: image
+           image: ui
+  - stage : qa
+      - input:
+        name: test-image
+        image: test-a
+  - stage : system
+      - input:
+         name: git-source
+         repository: https://github.ibm.com/mcheng/svt
+         branch: "master"
+  - stage:  system
+      - input:
+        name: svc-b-imge
+        image: svc-b
 ```
 
-Here is a pipeline just for PullRequest test builds:
+Note:
+- the default namespace is the name of the service followed by the name of the stage. For example, `ui-qa`.
+
+
+Here is a one stage workflow just for test builds:
 ```
 apiVersion: tekton.dev/v1alpha1
-kind: PipelineWorkflow
+kind: KabaneroWorkflow
 metadata:
-  name: svc-a-pr
+  name: ui-pr
   namespace: kabanero
 spec:
-  service : "svc-a"
-  stages:
-      - stage: 
-        name : build
-        namespace: svc-a-build
-        triggers:
-            input: 
-                name: git-source
-                    - event: "PullRequest"
-                    - includeBranches:
-                        - barnch: "master*"
-                        - branch: "develop*"
-        pipeline: 
-           name: appsody-bld-pr
-           - input: 
-               name: git-source
-               repository: http://github.ibm.com/mcheng/svc-a
-           - output:
-               name: image
-               image: svc-a
+  - stage: build
+    pipeline: appsody-bld
 ```
 
+And a realization of the workflow to do test builds on PullRequests only:
+
+apiVersion: tekton.dev/v1alpha1
+kind: KabaneroWorkflowResources
+metadata:
+  name: ui-pr
+  namespace: kabanero
+spec:
+  service : "ui-pr"
+  - stage: build
+    namespace: ui-pr-build
+    - input: 
+        name: git-source
+        repository: http://github.ibm.com/user/ui
+        triggers:
+          - type: repositoryEvent
+            - events:
+                - "PullRequest"
+            includeBranches:
+                - "master*"
+                - "develop*"
+                - "*[0-9]+.[0-9]+.[0-9]+.[0-9]*"
+             excludeBranches:
+                - "*test"
+       - output:
+           name: image
+           image: ui-pr
+```
 
 To initiate a new run manually, use the following custom resource:
 ```
 apiVersion: tekton.dev/v1alpha1
-kind: PipelineWorkflowRun
+kind: KabaneroWorkflowRun
 metadata:
-  name: svc-a-run-1
+  name: ui-workflow-1 
   namespace: kabanero
 spec:
-  workflow: svc-a
-  input: 
-      name: git-source
-      branch: "master"
+  workflow: ui-workflow
 ```
+
+The status of the run tracks the status of each stage. For example,
+```
+apiVersion: tekton.dev/v1alpha1
+kind: KabaneroWorkflowRun
+metadata:
+  name: ui-workflow-1 
+  namespace: ui-build
+spec:
+  workflow: ui-workflow
+status:
+  - stage: build
+    message: "In progress, See PipelineRun pipeline-run-ui-workflow-1"
+  - stage: qa
+    message: "waiting for stage build"
+  - stage: system
+    message: "waiting for stage build and manual approval."
+  - stage:a staging
+    message:  "waiting for stages qa and system"
+```
+
+For manual approval, add an annotation to the KabaneroWorkflowRun instance.  This may be done by an administrator, or through external tooling. for example,
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: KabaneroWorkflowRun
+metadata:
+  name: ui-workflow-1 
+  namespace: ui-build
+  annotations:
+      - manualApproval: 
+          stage: system
+          approvedBy: user
+spec:
+  workflow: ui-workflow
+status:
+  - stage: build
+    message: "In progress, See PipelineRun pipeline-run-ui-workflow-1"
+  - stage: qa
+    message: "waiting for stage build"
+  - stage: system
+    message: "waiting for stage: build. Manual approval granted."
+  - stage:a staging
+    message:  "waiting for stages qa and system"
+```
+
+**TBD:** Additional pre-conditions for a stage.
 
 **TBD:** Post condition for a stage:
 - Can enhance the design to allow post-conditions. For example, manually marking the stage as completed.
+- Should marking status_check for a build be part of Tekton or Kabanero?
 
 ## Configuring Webhooks
 
