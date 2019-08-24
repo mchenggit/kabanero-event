@@ -3,15 +3,14 @@
 ## Table of Contents
 * [Introduction](#Introduction)
 * [What is Kabanero?](#What_is_Kabanero)
-* [Usage Scenarios](#Usage_Scenarios)
-* [Functional Specification](#Functional_Specification)
-* [List of Events](#List_Events)
+* [Kabanero High Level Usage Scenarios](#Usage_Scenarios)
+* [Events Functional Specification](#Functional_Specification)
 
 
 <a name="Introduction"></a>
 ## Introduction
 
-This document contains the design of events in Kabanero. We start with an introduction to Kabanero and its value as a management infrastructure for cloud native devops. We then present the usage scenarios for Kabanero via three sample applications and their devops life cycle. This is followed by the functional specification to support the usage scenarios. Finally, we list the events that are required to support the functional specification.
+This document contains the design of events in Kabanero. We start with an introduction to Kabanero and its value as a management infrastructure for cloud native devops. We then present the usage scenarios for Kabanero via three sample applications and their devops life cycle. This is followed by the functional specification of events to support the usage scenarios. 
 
 <a name="What_is_Kabanero"></a>
 ## What is Kabanero?
@@ -77,7 +76,7 @@ The initial version of Kabanero will support:
 In order to ensure the design is extensible,  the remainder of this document covers more than one development environments, source control repositories, and pipeline technologies, even though some may not be in the Kabanero roadmap.
 
 <a name="Usage_Scenarios"></a>
-## Usage Scenarios
+## Kabanero High Level Usage Scenarios
 
 This section captures the usage scenarios, from which we can derive the functional specification. We begin with a sample production environment consisting of 3 different applications/services. This is followed by discussion on the devops pipeline that produces the production environment. Note that the usage scenarios presented in this section are not recommendations. They are meant to capture a variety of scenarios to ensure the functional specification is sufficiently useful.
 
@@ -312,399 +311,371 @@ For Github and Github Enterprise:
   - Openshift Pipelines
 
 
+
 <a name="Functional_Specification"></a>
-## Functional Specification
+## Events Functional Specification
 
-In this section, we will cover the specification of how to create multi-stage pipelines for a devops workflow.  We will limit the design to only what Kabanero currently supports:
-- Github for source control
-- Tekton for pipeline 
-- docker registry 
+Kabanero broadcasts relevant events on various topics. This allows for an extensible framework whereby new subscribers may be added to implement additional logic triggered by the events. 
 
+The built-in event topics include:
+- SourceRepository topic with web hook related events.
+- KabaneroManagement topic with Kabanero Management API call related events.
+- KabaneroClient topic with Kabanero API call related events.
+- KubernetesAPI topic with Kubernetes API call related events.
+- Pipeline topic with events related to pipeline execution.
 
-## Design Requirements
+The built-in event consumers include:
+- A pipeline run consumer that listens for SourceRepository events and initiates runs on pipelines.
+- A Pipeline status consumer that listens for KabernetesAPI events, and emits Pipeline events.
 
-Below is an example of a multi-stage pipeline to illustrate the design requirements:
-![Multi-Stage Pipeline](PipelineStages.jpg)
+Additional use cases may be added in the future. For example, 
+- Support additional source repositories and pipelines
+- Update status of various components to a slack channel
+- Sending urgent notification to an administrator
 
-The design requirements are:
-- The workflow is divided into stages, where each stage is a different pipeline.
-- There is a single top level stage where the workflow is triggered initially. (For example, `build` stage ) The supported triggers include:
-  - Github events
-  - timer based
-  - manual trigger
-- Subsequent stages of the pipeline may only be triggered after the successful completion of dependent stage(s). The trigger may be automatic or manual. For example,
-   - the `qa` stage is triggered automatically after the `build` stage succeeds.
-   - The `staging` stage is triggered automatically after both the `qa` and `system` stages succeed.
-   - The `system` stage is triggered manually after successful completion of `build` stage.
-- Some stages may run concurrently, for example, the `qa` and `system` stages.
+### Event Topics
 
+#### Topic: SourceRepository
 
-Each stage of the pipeline has its own input and output resources. The specification allows for sharing of these resources where  required. For example, the resource requirements for the above workflow is shown below:
+The attributes:
+- eventName: The name of the event in the repository, currently only `Push` and `PullRequest`.
+- repositoryType : type of repository, currently only `Github`
+- rawData: The actual JSON object coming from the repository, or a mapping of the data if original data is not JSON
 
-![Resource Dependencies](PipelineResources.jpg)
+#### Topic: KabaneroManagement
 
-- The `build` stage:
-  -  uses an input resource that is a source repository containing the source code for application `ui`. 
-  - Produces an output docker image `ui`.
-- All subsequent stages make use of the same docker image `ui` produced during the `build` stage, consistent with the notion of using an immutable image from build to production. 
-- The `system` stage depends on both the `ui` image, and on source repository `repo--ui-svt`. This repository contains the source code for the tests that are to be compiled and run against `ui`. 
-- The `staging` stage has an additional dependency on service `svc-b`
+The attributes:
+- eventName: one of `list`, `login`, `logout`, `onboard`, `refresh`
+- user: The ID of the user who initiated the call
+- **TBD**: API specific parameters
 
-## Sample Configuration
+#### Topic: KabaneroClient
 
-A Custom Resource Definition KabneroWorkflow is used to define the stages of a devops workflow, independent of the input resources, and the internal resource usage between the different pipelines.  For our example, it looks like:
+The attributes of the events are:
+- eventName: one of `login`, `logout`, etc
+- user: The ID of the user who initiated the call
+- **TBD**: API specific parameters
 
+#### Topic: KubernetesAPI
+
+The attributes are:
+- eventType: One of `create`, `modify`, `delete`, and `statusChange`
+- kind: kind of the resource
+- namespace: namespace of the resource, if resource is namespaced
+- name: name of the resource
+- resource: JSON specification of a Kubernetes resource
+- oldResource: for `modify` event type, JSON specification of the old resource.
+  
+Filter to Kubernetes APIs may be defined using the following custom resource definition. If multiple custom resources are defined, an event for a resource is only emitted if it passes both filters.
 ```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflow
+apiVersion: kabanero.io/v1alpha1
+kind: KubernetesAPIFilter
 metadata:
-  name: nodejs-workflow-1.0
+  name: apiFilter
   namespace: kabanero
 spec:
-  - stage : build
-    pipeline:  appsody-bld
-  - stage : qa
-    pipeline: qa-pipeline
-    dependentStages: 
-        - build
-    - inputRef:
-      name: application-image
-      fromStage: build
-      fromResource: image
- - stage : system
-   dependentStages: 
-     - "build"
-     - "qa"
-   manualTrigger: true
-   - inputRef:
-       name: application-image
-       fromStage: build
-       fromResource: image
-- stage: system
-  dependentStages: 
-    - qa
-    - system
-  - inputRef:
-    name: application-image
-    fromStage: build
-    fromResource: image
+  allowedNamespace:
+      - ns1*
+      - ns2
+  disallowedNamespace:
+      - ns1-test
+  allowedAPIGroups:
+      - tekton.*
+      - kabanero.*
+  disallowedAPIGroups:
+      - tekton.test
+  allowedKinds:
+      - Kabanero*
+      - Pipeline*
+  disallowedKinds:
+      - *Test
 ```
 
-The declaration contains:
-- The pipeline for each stage
-- The dependencies between the stages
-- Which stage is triggered automatically upon completion of dependent stages, and which is not
-- The connection of resources between stages.
+Note: for security reasons, Kubernetes resources for secrets are not stored in the `resource` or `oldResource` attributes. 
 
+#### Topic: Pipeline
 
-Here is a realization of the workflow for ui to build `master` or `develope` branch based on timer:
-
+The attributes are:
+- pipelineType: currently only `Tekton`
+- eventType: one of `startRun`, `endRun`, `modifyRun`, `deleteRun`, `statusChange`, `message`
+- `message` eventType is a message outside the context of a pipeline run.
+   - messageType: type of message, one of `error`, `warning`, `info`
+   - messageText: message text associated with the message.
+- For `deleteRun`:
+  - `name`: name of the run
+  - `namespace`: namespace of the run
+- For other eventTypes:
+  - `name`: name of the run
+  - `namespace`: namespace of the run
+  - `message`: any message associated with the run.
+  - `completionTime`: when the run completed, when available.
+  - `triggerMessage`: how the run was triggered, for `startRun`
+  - `lastConditionTime`: time of last condition update, if available
+  - `conditionMessage`: message for the condition
+  - `conditionReason`: reason for the condition
+  - `conditionStatus`: status for the condition
+  - `conditionType`: type for the condition
+  - `resource`: JSON Kubernetes resource. Use this to fetch status of individual TaskRuns.
+  - `oldResource: JSON of old Kubernetes resource for `modifyRUn`, if available.
+  
+Get get the status of the task runs for a PipelineRun, check the Kuburnetes `status` sub-resource embedded in the `resource` field. Here is an example:
 ```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflowResources
-metadata:
-  name: ui-workflow
-  namespace: kabanero
-spec:
-  workflow: nodejs-workflow-1.0
-  service : "ui"
-  - stage : build
-      namespace: ui-build
-      - input: 
-          name: git-source
-          repository: http://github.ibm.com/user/ui
-          triggers:
-              - type: cron
-                interval: "mm HH DD MM DW"
-                branches:
-                    - "master"
-                    - "develop"
-       - output:
-           name: image
-           image: ui
-  - stage : qa
-      - input:
-        name: test-image
-        image: test-a
-  - stage : system
-      - input:
-         name: git-source
-         repository: https://github.ibm.com/user/svt-ui
-         branch: "master"
-  - stage:  system
-      - input:
-        name: svc-b-imge
-        image: svc-b
-```
-
-Note:
-- the default namespace is the name of the service followed by the name of the stage. For example, `ui-qa`.
-
-
-Here is another example, a one stage workflow just for test builds:
-```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflow
-metadata:
-  name: ui-test-build
-  namespace: kabanero
-spec:
-  - stage: build
-    pipeline: appsody-bld
-```
-
-And a realization of the workflow to do test builds on PullRequests only:
-```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflowResources
-metadata:
-  name: ui-pr
-  namespace: kabanero
-spec:
-  workflow: "ui-build"
-  service : "ui-pr"
-  - stage: build
-    namespace: ui-build
-    - input: 
-        name: git-source
-        repository: http://github.ibm.com/user/ui
-        triggers:
-          - type: repositoryEvent
-            - events:
-                - "PullRequest"
-            includeBranches:
-                - "master*"
-                - "develop*"
-                - "*[0-9]+.[0-9]+.[0-9]+.[0-9]*"
-             excludeBranches:
-                - "*test"
-       - output:
-           name: image
-           image: ui-pr
-```
-
-To initiate a new run manually, use the following custom resource:
-```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflowRun
-metadata:
-  name: ui-workflow-1 
-  namespace: kabanero
-spec:
-  workflowResources: ui-workflow
-```
-
-The status of the run tracks the status of each stage. For example,
-```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflowRun
-metadata:
-  name: ui-workflow-1 
-  namespace: ui-build
-spec:
-  workflow: ui-workflow
 status:
-  - stage: build
-    message: "In progress, See PipelineRun pipeline-run-ui-workflow-1"
-  - stage: qa
-    message: "waiting for stage build"
-  - stage: system
-    message: "waiting for stage build and manual approval."
-  - stage:a staging
-    message:  "waiting for stages qa and system"
+  completionTime: 2019-08-06T22:23:33Z
+  conditions:
+  - lastTransitionTime: 2019-08-06T22:23:33Z
+    message: PipelineRun "appsody-manual-pipeline-run" failed to finish within "1h0m0s"
+    reason: PipelineRunTimeout
+    status: "False"
+    type: Succeeded
+  startTime: 2019-08-06T21:23:33Z
+  taskRuns:
+    appsody-manual-pipeline-run-appsody-build-b5b72:
+      pipelineTaskName: appsody-build
+      status:
+        completionTime: 2019-08-06T22:23:33Z
+        conditions:
+        - lastTransitionTime: 2019-08-06T22:23:33Z
+          message: TaskRun "appsody-manual-pipeline-run-appsody-build-b5b72" failed
+            to finish within "1h0m0s"
+          reason: TaskRunTimeout
+          status: "False"
+          type: Succeeded
+        podName: appsody-manual-pipeline-run-appsody-build-b5b72-pod-316a16
+        startTime: 2019-08-06T21:23:33Z
 ```
 
-For manual approval, add an annotation to the KabaneroWorkflowRun instance.  This may be done by an administrator, or through external tooling. for example,
+### Event Consumers
+
+#### PipelineRun SourceRepository Event Consumer
+
+The PipelineRun SourceRepository Event consumer reacts to SourceRepository events to trigger pipeline to run.  Currently it only supports Github repository events and Tekton pipeline.  The steps to define the pipeline and trigger is as follows:
+- Define Tekton Pipelines. 
+- Define the PipelineTrigger CustomResource Definition.
+- Set up a per-repository or organizational web hook.
+
+
+##### Defining Tekton Pipeline
+
+For automatic trigger from source repository, the pipeline must have 
+- one input resource that is a Github repository
+- zero or more input resource that is a docker image
+- Zero or more output resources that are docker images.
+
+Here is an example of a Pipeline that that has one input from Github, one input docker image, and one output docker image:
 
 ```
 apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflowRun
+kind: Pipeline
 metadata:
-  name: ui-workflow-1 
-  namespace: ui-build
   annotations:
-    - manualApproval: 
-        stage: system
-        approvedBy: user
-spec:
-  workflow: ui-workflow
-status:
-  - stage: build
-    message: "In progress, See PipelineRun pipeline-run-ui-workflow-1"
-  - stage: qa
-    message: "waiting for stage build"
-  - stage: system
-    message: "waiting for stage: build. Manual approval granted."
-  - stage:a staging
-    message:  "waiting for stages qa and system"
-```
-
-**TBD:** Additional pre-conditions for a stage.
-
-**TBD:** Post condition for a stage:
-- Can enhance the design to allow post-conditions. For example, manually marking the stage as completed.
-- Should marking status_check for a build be part of Tekton or Kabanero?
-
-### Improving Usability 
-
-To enable automatic matching of a repository to a KabaneroWorkflow without have to create KabaneroWorkflowResources, define the stacks supported the input of the first stage:
-```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflow
-metadata:
-  name: nodejs-workflow-1.0
+     kabanerio.io/stacks: 
+         - appsody/nodejs-0.2.2
+         - appsody/nodejs-0.2.3
+  labels:
+    kabanerio.io/stack: appsody.nodejs.0.2.2
+  name: appsody-build-pipeline
   namespace: kabanero
 spec:
-  - stage : build
-    pipeline:  appsody-bld
-    -input: git-source
-     supportedStacks:
-       - appsody/nodejs-0.2.2.2
+  resources:
+  - name: git-source
+    type: git
+  - name: docker-source
+    type: image
+  - name: docker-image
+    type: image
+  tasks:
+  - name: appsody-build
+    params:
+    - name: appsody-deploy-file-name
+      value: appsody-service.yaml
+    resources:
+      inputs:
+      - name: git-source
+        resource: git-source
+      - name: docker-source
+        resource: docker-source
+      outputs:
+      - name: docker-image
+        resource: docker-image
+    taskRef:
+      name: appsody-build-task
+```
+
+
+##### Defining PipelineRunTrigger custom resource
+
+The association between a SourceRepositoryEvent and a Pipeline is defined in a PipelineTrigger Custom Resource. Here is a long example with all options filled in:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: PipelineTrigger
+metadata:
+  name: my-pipeline-trigger
+  namespace: kabanero
+spec:
+   repositorySelector:
+    type: git
+    repository: https://github.com/*
+    namespace: ${repositoryName}
+    triggers:
+      - type: cron
+        interval: "mm HH DD MM DW"
+        branches:
+          - "integration"
+      - type: SourceRepositoryEvent
+        eventNames: 
+            - PullRequest
+            - Push
+        includeBranches:
+          - "master"
+          - "develop"
+          - "*[0-9]+.[0-9]+.[0-9]+.[0-9]+"
+        excludeBranches:
+          - "*-test"
+    pipelineSelector:
+      - method: fromSourceRepository
+        fileName: ".kabanero-config.yaml"
+        fileAttribute: "stack"
+        labelName: "kabanerio.io/stack"
+      - method: fromSourceRepository
+        fileName: ".appsody-config.yaml"
+        fileAttribute: "stack"
+        annotationName: "kabanerio.io/stacks"
+      - method: pipeline
+        kind: "Pipeline"
+        selector : 
+            label: "*nodejs.0.2.*"
+            annotation: "*nodejs.0.2.*"
+  inputResources:
+    - name: docker-source
+      value: docker-registry.default.svc:5000/${namespace}/testHelper
+  outputResources:
+    - name: docker-image
+      value: docker-registry.default.svc:5000/${namespace}/${repositoryOwner}-${repositoryName}
+  serviceAccount: appsody-sa
+  timeout: 1h0m0s
+```
+
+Several variables are available when defining namespace of the run, and the docker image URL:
+- `repositoryOwner`: The owner of the source repository. 
+- `repositoryName`: The name of the source repository
+- `repositoryBranch`: the branch of the source repository being built.
+- `namespace`: The namespace of the run. Can not be used when defining the namepace.
+
+
+There are several ways to trigger a pipeline:
+- By timer. For our example, it's defined with the syntax for `cron`, and is triggered for the `integration` branch.
+- By a SourceRepositoryEvent. For our example, it's triggered by either a PullRequest or a Push event. 
+   - The `includeBranches` attribute specifies which branches are allowed. If not is specified, then it assumes "*".
+   - the `excludeBranches` specifies which branches should not be built, even if they match the `includeBranches`. For our example, anything that end with "-test". 
+
+Once a the source repository URL and branch are known, they can  be used to find a candidate pipeline to run. There are several ways to find a candidate:
+- by matching an attribute contained in a yaml or JSON file on the resource repository. 
+  - Our first example matches a YAML file `.kabanero-config.yaml` to values stored in the label whose name is `kabaner.io/stack` in  the pipeline. Note that the string "appsosody/node-js:0.2.2" is not a valid label value in Kubernetes. That's the reason that it is stored as "appsody.node.js.0.2.2".
+  - Our second example matches a YAML file ".appsody-config.yaml" to values stored in the anntoation whose name is "kabanerio.io/stacks". The reason for using annotations to store multiple stack names is due to the limitations in the number of characters allowed for a label value.
+
+
+Several default values are stored in a ConfigMap named kabanero.pipeline.trigger.default.values. These values may be changed by the administrator:
+```
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kabanero.pipeline.trigger.default.values
+  namespace: kabanero
+data:
+  repositoryType: git
+    default-namespace: ${repository-name}
+    default-Source-repository-config-files:
+      - .kabanero-config.yaml
+      - .appsody-config.yaml
+    default-allowed-branches: 
+      - master
+      - deveolop
+    default-source-repository-events:
+      - PullRequest
+      - Push
+  default-docker-registry: docker-registry.default.svc:5000
+  default-output-url: ${default-docker-registry}/{namespace}/{repository-name}
+```
+
+Here is the same example taking all defaults:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: PipelineTrigger
+metadata:
+  name: hello-world-trigger
+  namespace: kabanero
+spec:
+   repositorySelector:
+    repository: https://github.com/some-user/*
+  inputResources:
+    - name: docker-source
+      value: docker-registry.default.svc:5000/${namespace}/testHelper
+  serviceAccount: appsody-sa
+```
+
+**TBD: It's not yet clear the same pipeline may be used for both Push and PullRequest.**
+
+
+Generated PipelneRun:
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineRun
+metadata:
+  annotation:
+      kabanerio.io/pipelinetrigger : "my-pipeine-trigger"
+      kabanerio.io/triggeredBy: "Push request"
+  name: 
+  namespace:  my-pipeline-trigger-1
+spec:
+  pipelineRef:
+    name: appsody-build-pipeline
+  resources:
+  - name: git-source
+    resourceRef:
+      name: my-pipeline-trigger-1-git-source
+  - name: docker-image
+    resourceRef:
+      name: my-pipeline-trigger-1-docker-image
+  serviceAccount: appsody-sa
+  timeout: 1h0m0s
+
+```
+The PipelineRun must be associated with exactly one PipelineRunResource that points to a Github repository. Here is an example:
+```
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineResource
+metadata:
+  name: git-source
+  namespace: kabanero
+spec:
+  params:
+  - name: revision
+    value: master
+  - name: url
+    value: https://github.com/user/appsody-hello-world/
+  type: git
+```
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineResource
+metadata:
+  name: docker-image
+  namespace: kabanero
+spec:
+  params:
+  - name: url
+    value: docker-registry.default.svc:5000/kabanero/java-microprofile
+  type: image
   ```
 
-Automatic matching behaves as follows
-- a  repository contains a .appsody.yaml or a .kabanero.yaml matching exactly one stack in one KabaneroWorflow
-- The name of the branch is one that is enabled for automatic matching. The default branches are: "master", "develop", and any branch that ends in n.n.n.n or n.n.n.n.n.
-- All the input resource for all other than first stage can be derived automatically.
-- All output resources for all stages can be derived automatically.
-- The events from the repository are processed as follows:
-  - For a PullRequest, only the build stage is triggered.
-  - For a Push, all stages are potentially triggered, depending on whether prior stages completed successfully, and whether manual trigger is required.
 
-The automatically generated run looks like:
-
-```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflowRun
-metadata:
-  name: ui-workflow-auto-1
-  namespace: ui-build
-spec:
-  workflow: nodejs-workflow-1.0
-  - input:
-      repositoryEvnet: "Push"
-      name: git-source
-      repository: https://github.ibm.com/user/HelloWorld
-      branch: master
-
-```
-
-For a KabaneroWorkflow, matching the output of a stage to input of another stage can be done automatically if:
-- The first stage has only one docker image output, and all subsequent stages have only one docker image input, and no other output from the stages they depend on.
-- The name of an output resource matches the name of an input resource in a subsequent stage.
-
-Can also consider defining an alias to reduce amount of typing when matching output of one stage to input of a subsequent stage. For example,
-```
-apiVersion: tekton.dev/v1alpha1
-kind: KabaneroWorkflow
-metadata:
-  name: nodejs-workflow-1.0
-  namespace: kabanero
-spec:
-  - stage : build
-    pipeline:  appsody-bld
-    - output: output-image
-      ailas :  imageAlias
-  - stage : qa
-    pipeline: qa-pipeline
-    dependentStages: 
-        - build
-    - inputAlias: imageAlias
- - stage : system
-   dependentStages: 
-     - "build"
-     - "qa"
-   manualTrigger: true
-   - inputAlias: imageAlias
-- stage: system
-  dependentStages: 
-    - qa
-    - system
-  - inputAlias: imageAlias
-```
-
-
-## Configuring Webhooks
+##### Configuring Webhooks
 
 A github organizational webhook enables the administrator to configure the webhook just once for all repositories within the organization. Per-repository webhook is not required. The instructions are here: 
 https://help.github.com/en/articles/configuring-webhooks-for-organization-events-in-your-enterprise-account.
 
 Alternatively, a repository webhook may be configured for a private repository. The instructions are here: **TBD: get link**.
-
-
-<a name="List_Events"></a>
-
-## List of Events
-
-### Topic: Pipeline
-
-The name of the topic is "Pipeline"
-
-The attributes are:
-- pipelineType: the type of pipeline, currently only `Tekton`
-- action: action performed, one of:
-  - `started`: a new run has started
-  - `completed`: a run has completed. 
-  - `deleted`: a run has been deleted.
-  - `statusUpdate`: The status of a run has changed.
-- name: the name of the run, should be a Kubernetes resource name. 
-  - For Tekton, it's the name of the pipeline run.
-- details: pipeline independent details related to an action
-   - for action == `started`, what triggered the new run:
-     - manual: manual trigger + who triggered it.
-     - repository: details of change to the repository
-     - dependentImage: dependent images changed + details of change to the image
-     - PipelineSpecification: the specification of the pipeline has changed. This includes the pipeline specification itself + changes to images in the pipeline infrastructure.
-   - for action == `completed`:
-     - completion status: succeeded, failed, timed out
-   - for action == `deleted`:
-     - reason for deletion if known
-       - for example, garbage collection
-   - for action == `statusUpdate`:
-       - **TBD**: pipeline neutral status update??
-
-**TBD:** Kabanero emitted events, such as how it matches repository to a pipeilne.
-
-### Topic: SourceRepository
-
-The name of the topic is `SourceRepository`.
-The attributes of the events are:
-- repositoryType : type of repository. 
-- eventName: The name of the event in the repository
-- eventData: The actual JSON object coming from the repository, or a mapping of the data if original data is not JSON
-
-Currently, these are supported:
-- repositoryType:  only github
-  - eventName:
-    - Push
-    - PullRequest
-
-### Topic: ImageRepository
-
-**TBD:** Still need to work out the details.
-The name of the topic is "ImageRpository". The attributes of the event are:
-- repositoryType: type of image repository. Currently `docker`.
-- eventName: name of the event
-      - `tagged`: an image has been tagged
-      - `pushed`: new image has been pushed.
-      - `updated`: Image updated with a new SHA
-- repositoryLocation  location of the image
-- imageName: name of the image
-- eventData: The actual JSON object associated with the event, or a mapping of the original data to JSON if the original data is not JSON
-    - for docker, at least SHA for the image.
-
-
-### Topic: KabaneroAPI
-
-Audit of calls to Kabanero API
-
- For Kabanero-mgmt:
-- list
-- login
-- logout
-- onboard
-- refresh
-
-**TBD**: How about client side CLI?
-
-**TBD**: any other API? How about any that may be called by Appsody?
