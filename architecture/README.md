@@ -379,7 +379,7 @@ status:
 
 #### Kabanero web hook Listener
 
-When source is pushed, or when a PullRequest is created, the Kabanero web hook listener receives POST request from github, and emits a SourceRepository event to the /kabanero/SourceRepository topic,  where `kabanero` is the kabanero instance name.  For example, the event for a push  may be:
+When source is pushed, or when a PullRequest is created, the Kabanero web hook listener receives POST request from github, and emits a `SourceRepository` event to the `/kabanero/SourceRepository` topic,  where `kabanero` is the kabanero instance name.  For example, the event for a push  may be:
 
 ```
 - repositoryType: Github
@@ -448,12 +448,15 @@ The Kabanero operator reacts to the creation of KabaneroRun resource, and starts
    - Monitor the status of PipelineRun and update the summary in the status field of KabaneroRun.
 
 
+The kabanero operator also reacts to changes to the KabaneroRun resource instance:
+- When the instance is modified, modify/delete/create pipeline resources to match the specification change.
+- When the instance is deleted, delete pipeline resources related to this run.
+
 #### Other Ways to Trigger a Build
 
 There are many other ways to trigger a run:
 - Manually by apply a new KabaneroRun resource
-- Programmatically by some other service. For example, a button set up on github repository may invoke a REST call to a service that starts a manual run on the repository.
-- Programmatically by some other service
+- Programmatically by some other service or event listener. For example, a button set up on github repository may invoke a REST call to a service that starts a manual run on the repository.
 
 
 #### Additional Options on KabaneroRun:
@@ -471,7 +474,7 @@ apiVersion: kabanerio.io/v1alpha1
         branch: master
 ```
 
-Another option to consider is to override the behavior of how to find a matching collection. For example, use a specific stack:
+Another option to consider is to override the behavior of how to find a matching collection. For example, use a specific stack during the build:
 ```
 apiVersion: kabanerio.io/v1alpha1
     name: hello-world-1234567-1
@@ -495,7 +498,6 @@ apiVersion: kabanerio.io/v1alpha1
         repository:  https://github.com/user/hello-world
         operation: Timer
         branch: master
-        stack: appsody/nodejs-0.2.2
 ```
 
 
