@@ -322,8 +322,152 @@ The built-in event consumers include:
 
 Additional use cases may be added in the future. For example, 
 - Support additional source repositories and pipelines
-- Report status of various components to a slack channel
+-ControllerController Report status of various components to a slack channel
 - Sending urgent notifications to a user
+
+
+
+### Sample Build Pipeline Trigger Scenario 
+
+Let's first describe how a web hook is configured, and what happens when triggered to illustrate the follow from commit to the source repository to initiating a build.
+
+#### Configuring web hook
+
+To set up web hooks to github, create and apply an EventSource. Here is an example for setting up an organizational web hook:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: EventSource
+metadata:
+  name: myorg-github
+  namespace: kabanero
+spec:
+    type: github
+    url: https://github.com/enterprises/myorg
+    apiSecret: myorg-github-api
+```
+
+Here is an example to set up a per-repository web hook to Github as an event source. 
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: EventSource
+metadata:
+  name: user-hello-world-github
+  namespace: kabanero
+spec:
+    type: git
+    url: https://github.com/user/hello-world
+    apiSecret: user-hello-world-github-api
+```
+
+#### Kabanero web hook Listener
+
+When source is pushed, or when a PullRequest is created, the Kabanero web hook listener receives POST request from the github, and emits a SourceRepository event to the /kabanero/SourceRepository topic,  where `kabanero` is the kabanero instance name.  For example, the event for a push  may be:
+
+```
+- repositoryType: Github
+- eventName: Push
+- location: https://github.com/myorg/hello-world
+- branch: master
+- sha: 1234567
+- rawData: JSON of the request
+```
+
+An event for a PullRequest may be:
+
+```
+- repositoryType: Github
+- eventName: PullRequest
+- location: https://github.com/myorg/hello-world
+- branch: master
+- sha: 1234567
+- rawData: JSON of the request
+```
+
+#### Kabanero Repository event Listener
+
+The Kabanero Repository event listener receives the event, and creates a new KabaneroRun CRD to start the build. For the PullRequest:
+
+```
+apiVersion: kabanerio.io/v1alpha1
+    name: hello-world-1234567-1
+    Kind: KabaneroRun
+    spec:
+        type: github
+        repository:  https://github.com/user/hello-world
+        operation: Push
+        branch: master
+        sha:   1234567  
+```
+
+For a Pull Request:
+```
+    apiVersion: kabanerio.io/v1alpha1
+    name: hello-world-1234567-1
+    Kind: KabaneroRun
+    spec:
+        type: github
+        repository:  https://github.com/user/hello-world
+        operation: PullRequest
+        pullRequest: <info about PR>
+```
+
+#### Kabanero Operator
+
+The Kabanero operator reacts to the creation of KabaneroRun resource, and starts a build as follows:
+- Fetch appsody-config.yaml (or possibly some other yaml) to get the stack name. For example, appsody/nodejs-0.2.2.
+- Use the name of the stack to find a matching collection: find active collection with highest semantically matched version number. For example, appsody/node-js:0.0.2.5.
+   - **TBD: How can we track: (repository commit X collection version X  output docker image tag) so that we can reproduce the build when needed?.**
+- Find the pipeline associated with the collection. For now, it'll be limited to a Tekton pipeline:
+   - **TBD:** We'll assume it's a build pipeline with source repository input, and image output
+   - **TBD:** Assume same pipeline can be used for both Push and PullRequest build, or we'll need two pipelines in the collection.
+   - **TBD:** We'll need a way to limit what operations can be associated with what branches. 
+- Start a new run of the Pipeline. For Tekton this means:
+   - Creating a new PipelineResource for the input repository
+   - Creating a new PieplineResource for the output docker image
+      - The name of the image is ${default-docker-registry}/helo-world
+      - **TBD**: Tag it with commit id, such as as ${default-docker-registyr}/hello-world:123456?
+      - **TBD**: Tag it as build ID, such as  ${default-docker-registry}hello-world:hello-world-123456-1?
+   - Create a new PipelineRun to start the run
+   - Monitor the statu of PipelineRun and update the summary in the status field of KabaneroRun.
+
+
+#### Other Ways to Trigger a Build
+
+There are many other ways to trigger a run:
+- Manually by apply a new KabanerRun resource
+- Programmatically by some other service. For example, a button set up on github repository may invoke a REST call to a service that starts a manual run on the repository.
+
+
+#### Additional Options on KabaneroRun:
+
+One option to consider is a timer based build. For example,
+```
+apiVersion: kabanerio.io/v1alpha1
+    name: hello-world-1234567-1
+    Kind: KabaneroRun
+    spec:
+        type: github
+        repository:  https://github.com/user/hello-world
+        operation: Push
+        cron: "mm HH DD MM DW"
+        branch: master
+```
+
+Another option to consider is to override the behavior of how to find a matching collection. For example, use a specific stack in:
+```
+apiVersion: kabanerio.io/v1alpha1
+    name: hello-world-1234567-1
+    Kind: KabaneroRun
+    spec:
+        type: github
+        repository:  https://github.com/user/hello-world
+        operation: Push
+        branch: master
+        sha: 123456
+        useStack: appsody/nodejs-0.2.2
+```
 
 ### Event Topics
 
@@ -413,6 +557,10 @@ The attributes are:
   
 **TBD**: For now, we will offer general messages. specific messages will involve additional calls to Kubeneretes.** 
 
+
+#### Topic: KabaneroOperator
+
+**TBD: Kabanero Operator related events**
 
 ### Event Consumers
 
@@ -675,7 +823,52 @@ data:
 
 ##### Configuring Webhooks
 
-A github organizational webhook enables the administrator to configure the webhook just once for all repositories within the organization. Per-repository webhook is not required. The instructions are here: 
-https://help.github.com/en/articles/configuring-webhooks-for-organization-events-in-your-enterprise-account.
+To set up web hooks to github, create and apply an EventSource. Here is an example for setting up an organizational web hook:
 
-Alternatively, a repository webhook may be configured for a private repository. The instructions are here: **TBD: get link**.
+```
+apiVersion: kabanero.io/v1alpha1
+kind: EventSource
+metadata:
+  name: myorg-github
+  namespace: kabanero
+spec:
+    type: git
+    url: https://github.com/enterprises/myorg
+    secret: myorg-github
+```
+
+Here is an example to set up a per-repository web hook to Github as an event source. In addition, it also configures which events from Github are to be emitted:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: EventSource
+metadata:
+  name: user-hello-world-github
+  namespace: kabanero
+spec:
+    type: git
+    url: https://github.com/user/hello-world
+    apiSecret: user-hello-world-github
+    allowedEvents:
+        - Push
+        - PullRequest
+```
+
+The `apiSecret` is the authentication token required to authenticate with Github to add or modify the webhook. **NOTE:** Additional secrets may need to be configured, such as ssh, to enable some pipelines.
+
+The status shows whether or not the web hook is configured. For example:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: EventSource
+metadata:
+  name: myorg-github
+  namespace: kabanero
+spec:
+    type: git
+    url: https://github.com/enterprises/myorg
+    apiSecret: myorg-github-api
+status:
+    webhook-configured: false
+    details: "Unable to connect to https://github.com/enterprise/myorg due to failure to authenticate"
+```
+
+Once configured, the web hook listener will emit SourceRepositoryEvents
