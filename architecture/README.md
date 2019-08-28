@@ -411,7 +411,7 @@ apiVersion: kabanerio.io/v1alpha1
     Kind: KabaneroRun
     spec:
         type: github
-        repository:  https://github.com/user/hello-world
+        repository:  https://github.com/myorg/hello-world
         operation: Push
         branch: master
         sha:   1234567  
@@ -424,7 +424,7 @@ For a Pull Request:
     Kind: KabaneroRun
     spec:
         type: github
-        repository:  https://github.com/user/hello-world
+        repository:  https://github.com/myorg/hello-world
         operation: PullRequest
         pullRequest: <info about PR>
 ```
@@ -442,15 +442,16 @@ The Kabanero operator reacts to the creation of KabaneroRun resource, and starts
 - Start a new run of the Pipeline. For Tekton this means:
    - Creating a new PipelineResource for the input repository
    - Creating a new PipelineResource for the output docker image
-      - The name of the image is ${default-docker-registry}/hello-world-master
-      - **TBD**: Tag it with commit id, such as as ${default-docker-registry}/hello-world-master:123456?
+      - The name of the image is ${default-docker-registry}/${namespace}/hello-world, where namespace is hello-world.
+      - **TBD**: Tag it with commit id, such as as ${default-docker-registry}/${namepace}hello-world:123456?
+      - **TBD**: Should use some other name if not building master.
    - Create a new PipelineRun to start the run
    - Monitor the status of PipelineRun and update the summary in the status field of KabaneroRun.
 
 
 The kabanero operator also reacts to changes to the KabaneroRun resource instance:
-- When the instance is modified, modify/delete/create pipeline resources to match the specification change.
-- When the instance is deleted, delete pipeline resources related to this run.
+- When the instance is modified/deleted, create the pipeline resources to match the specification change.
+- When the instance is deleted, delete pipeline resources associated with  this run.
 
 #### Other Ways to Trigger a Build
 
