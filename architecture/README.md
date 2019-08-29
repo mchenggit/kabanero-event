@@ -370,8 +370,8 @@ spec:
     url: https://github.com/enterprises/myorg
     apiSecret: myorg-github-api
 status:
-  connected: true
-  message: "web hook created for https://github.com/entgerprise/myorg at web hook URL: https://my-openshift-cluster/kabanero/webhook using defaul-kabanero-webhook-secret"
+  configured: true
+  message: "web hook created for https://github.com/entgerprise/myorg with web hook URL: https://my-openshift-cluster/kabanero/webhook using secret  defaul-kabanero-webhook-secret"
 ```
 
 #### Kabanero web hook Listener
@@ -401,7 +401,7 @@ An event for a PullRequest may be:
 
 #### Kabanero Repository event Listener
 
-The Kabanero Repository event listener receives the event, and creates a new KabaneroRun CRD to start the build. The KabaneroRun CRD makes it easy to initiate a new build, no matter how it's triggered. It only requires input identifying which part of source code to build. Underneath the covers, it matches the source code to pre-configure build pipeline, and starts the build.
+The Kabanero Repository event listener receives the event, and creates a new KabaneroRun CRD instance to start the build. The KabaneroRun CRD makes it easy to initiate a new build, no matter how it's triggered. It only requires input identifying which part of source code to build. Underneath the covers, it matches the source code to pre-configure build pipeline, and starts the build.
 
 Here is an example for a `Push`:
 ```
@@ -473,8 +473,9 @@ apiVersion: kabanerio.io/v1alpha1
 ```
 
 The kabanero operator also reacts to changes to the KabaneroRun resource instance:
-- When the instance is created/modified, create the pipeline resources to match the specification change.
+- When the instance is created, create the pipeline resources to match the specification change.
 - When the instance is deleted, delete pipeline resources associated with  this run.
+- Currently it does not support modifying the instance.
 
 #### Other Ways to Trigger a Build
 
