@@ -322,18 +322,18 @@ The built-in event consumers include:
 
 Additional use cases may be added in the future. For example, 
 - Support additional source repositories and pipelines
--ControllerController Report status of various components to a slack channel
+- Report status of various components to a slack channel
 - Sending urgent notifications to a user
 
 
 
 ### Build Pipeline Scenario 
 
-In this section, we present the first use cases to be supported via events, which is triggering build pipelines. Let's first describe how a web hook is configured, and what happens when triggered to illustrate what happens from commit to the source repository to initiating a build.
+In this section, we present the first use cases to be supported via events, which is triggering build pipelines. Let's first describe how a web hook is configured, and what happens from commit to the source repository to initiating a build.
 
 #### Configuring web hook
 
-To set up web hooks to github, create and apply an EventSource. Here is an example for setting up an organizational web hook:
+To set up web hooks to github, create and apply a GithubEventSource. Here is an example for setting up an organizational web hook:
 
 ```
 apiVersion: kabanero.io/v1alpha1
@@ -401,7 +401,7 @@ An event for a PullRequest may be:
 
 #### Kabanero Repository event Listener
 
-The Kabanero Repository event listener receives the event, and creates a new KabaneroRun CRD to start the build. The KabaneroRun CRD makes it easy to initiate a new build, no matter how it's triggered. It only requires input identifying which part of source code the build, and underneath the covers, it matches the source code to pre-configure build pipeline, and starts the build.
+The Kabanero Repository event listener receives the event, and creates a new KabaneroRun CRD to start the build. The KabaneroRun CRD makes it easy to initiate a new build, no matter how it's triggered. It only requires input identifying which part of source code to build. Underneath the covers, it matches the source code to pre-configure build pipeline, and starts the build.
 
 Here is an example for a `Push`:
 ```
@@ -473,7 +473,7 @@ apiVersion: kabanerio.io/v1alpha1
 ```
 
 The kabanero operator also reacts to changes to the KabaneroRun resource instance:
-- When the instance is modified/deleted, create the pipeline resources to match the specification change.
+- When the instance is created/modified, create the pipeline resources to match the specification change.
 - When the instance is deleted, delete pipeline resources associated with  this run.
 
 #### Other Ways to Trigger a Build
