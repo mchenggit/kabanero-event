@@ -307,7 +307,7 @@ For Github and Github Enterprise:
 <a name="Functional_Specification"></a>
 ## Events Functional Specification
 
-Kabanero hosts an event infrastructure to allow system components to communicate with each other asynchronously. This enables an extensible framework whereby event producers and consumers and topics may be added to implement additional system level function. 
+Kabanero hosts an event infrastructure to allow system components to communicate with each other asynchronously. This enables an extensible framework whereby event topics, producers, and consumers may be added to implement additional system level function. 
 
 The built-in event topics include:
 - SourceRepository topic with events related to changes in source code repository.
@@ -327,9 +327,9 @@ Additional use cases may be added in the future. For example,
 
 
 
-### Sample Build Pipeline Scenario 
+### Build Pipeline Scenario 
 
-Let's first describe how a web hook is configured, and what happens when triggered to illustrate what happens from commit to the source repository to initiating a build.
+In this section, we present the first use cases to be supported via events, which is triggering build pipelines. Let's first describe how a web hook is configured, and what happens when triggered to illustrate what happens from commit to the source repository to initiating a build.
 
 #### Configuring web hook
 
@@ -337,12 +337,11 @@ To set up web hooks to github, create and apply an EventSource. Here is an examp
 
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: EventSource
+kind: GithubEventSource
 metadata:
   name: myorg-github
   namespace: kabanero
 spec:
-    type: github
     url: https://github.com/enterprises/myorg
     apiSecret: myorg-github-api
 ```
@@ -351,12 +350,11 @@ Here is an example to set up a per-repository web hook to Github as an event sou
 
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: EventSource
+kind: GithubEventSource
 metadata:
   name: user-hello-world-github
   namespace: kabanero
 spec:
-    type: git
     url: https://github.com/user/hello-world
     apiSecret: user-hello-world-github-api
 ```
@@ -364,12 +362,11 @@ spec:
 The status of the event source shows whether the web hook was configured. For example:
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: EventSource
+kind: GithubEventSource
 metadata:
   name: myorg-github
   namespace: kabanero
 spec:
-    type: github
     url: https://github.com/enterprises/myorg
     apiSecret: myorg-github-api
 status:
@@ -379,7 +376,7 @@ status:
 
 #### Kabanero web hook Listener
 
-When source is pushed, or when a PullRequest is created, the Kabanero web hook listener receives POST request from github, and emits a `SourceRepository` event to the `/kabanero/SourceRepository` topic,  where `kabanero` is the kabanero instance name.  For example, the event for a push  may be:
+When source is pushed to Github, or when a PullRequest is created, the Kabanero web hook listener receives a POST request from github, and emits a `SourceRepository` event to the `/kabanero/SourceRepository` topic,  where `kabanero` is the kabanero instance name.  For example, the event for a push  may be:
 
 ```
 - repositoryType: Github
@@ -389,6 +386,7 @@ When source is pushed, or when a PullRequest is created, the Kabanero web hook l
 - sha: 1234567
 - rawData: JSON of the request
 ```
+**TBD: How much filtering for the raw data.**
 
 An event for a PullRequest may be:
 
@@ -403,8 +401,9 @@ An event for a PullRequest may be:
 
 #### Kabanero Repository event Listener
 
-The Kabanero Repository event listener receives the event, and creates a new KabaneroRun CRD to start the build. For the PullRequest:
+The Kabanero Repository event listener receives the event, and creates a new KabaneroRun CRD to start the build. The KabaneroRun CRD makes it easy to initiate a new build, no matter how it's triggered. It only requires input identifying which part of source code the build, and underneath the covers, it matches the source code to pre-configure build pipeline, and starts the build.
 
+Here is an example for a `Push`:
 ```
 apiVersion: kabanerio.io/v1alpha1
     name: hello-world-1234567-1
@@ -417,7 +416,7 @@ apiVersion: kabanerio.io/v1alpha1
         sha:   1234567  
 ```
 
-For a Pull Request:
+And for a PullRequest: 
 ```
     apiVersion: kabanerio.io/v1alpha1
     name: hello-world-1234567-1
@@ -433,21 +432,45 @@ For a Pull Request:
 
 The Kabanero operator reacts to the creation of KabaneroRun resource, and starts a build as follows:
 - Fetch appsody-config.yaml (or possibly some other yaml) to get the stack name. For example, appsody/nodejs-0.2.2.
-- Use the name of the stack to find a matching collection. The default policy is to find an active collection with highest semantically matched version number. For example, appsody/node-js:0.0.2.5.
-   - **TBD: How can we track: (repository commit X collection version X  output docker image tag) so that we can reproduce the build when needed?.**
+- Use the name of the stack to find a matching collection. The default policy is exact match. Other matching policies may be provided in the future.
 - Find the pipeline associated with the collection. For now, it'll be limited to a Tekton pipeline:
-   - **TBD:** We'll assume it's a build pipeline with source repository input, and image output
-   - **TBD:** Assume same pipeline can be used for both Push and PullRequest build, or we'll need two pipelines in the collection.
-   - **TBD:** See later for how to define a way to limit what operations can be associated with what branches.
+   - **TBD:** Assume it's a build pipeline with one source repository input, and one output image
+   - **TBD:** Assume same pipeline can be used for both Push and PullRequest build, or we'll need updated collection with two pipelines.
 - Start a new run of the Pipeline. For Tekton this means:
    - Creating a new PipelineResource for the input repository
    - Creating a new PipelineResource for the output docker image
-      - The name of the image is ${default-docker-registry}/${namespace}/hello-world, where namespace is hello-world.
-      - **TBD**: Tag it with commit id, such as as ${default-docker-registry}/${namepace}hello-world:123456?
-      - **TBD**: Should use some other name if not building master.
+      - The name of the output image is ${default-docker-registry}/${repository-name}/${repository-name}:${source-id}
+      - The variable `default-docker-registry` is part of Kabanero configuration.
+      - The variable `repository-name` is built in,  derived from the SourceRepository. In this case, `hello-world`.
+      - The variable `source-id` is a unique identifier of the source. For github, this is commit's SHA.
+      - For our example, the name of the docker registry may be: `docker-registry.default.svc:5000/hello-world/hello-world:1234567`
    - Create a new PipelineRun to start the run
    - Monitor the status of PipelineRun and update the summary in the status field of KabaneroRun.
 
+The Kabanero operator uses annotations to track the actual pipeline instance created, and uses the status to update the overall status of the build. For our example, the annotation `kabanerio.io/pipeline-resources` lists all the resources that was automatically created to enable the build to run. 
+
+```
+apiVersion: kabanerio.io/v1alpha1
+    name: hello-world-1234567-1
+    Kind: KabaneroRun
+    metadata:
+        annotations: 
+            - kabanerio.io/pipeline-resources:
+                - kabanero.io/resource-name: hello-world-1234567-1
+                  kabbanero.io/resoruce-kind: PipelineRun
+                - kabanero.io/resource-name: hello-world-git-source-1234567-1
+                  kabbanero.io/resoruce-kind: PipelineResource
+                - kabanero.io/resource-name: hello-world-docker-image-1234567-1
+                  kabbanero.io/resoruce-kind: PipelineResource
+    spec:
+        type: github
+        repository:  https://github.com/myorg/hello-world
+        operation: Push
+        branch: master
+        sha:   1234567  
+    status:
+        state: in-progress
+```
 
 The kabanero operator also reacts to changes to the KabaneroRun resource instance:
 - When the instance is modified/deleted, create the pipeline resources to match the specification change.
@@ -455,7 +478,7 @@ The kabanero operator also reacts to changes to the KabaneroRun resource instanc
 
 #### Other Ways to Trigger a Build
 
-There are many other ways to trigger a run:
+Other triggers include:
 - Manually by apply a new KabaneroRun resource
 - Programmatically by some other service or event listener. For example, a button set up on github repository may invoke a REST call to a service that starts a manual run on the repository.
 
@@ -472,21 +495,9 @@ apiVersion: kabanerio.io/v1alpha1
         repository:  https://github.com/user/hello-world
         operation: Push
         cron: "mm HH DD MM DW"
-        branch: master
+        branch: integration
 ```
 
-Another option to consider is to override the behavior of how to find a matching collection. For example, use a specific stack during the build:
-```
-apiVersion: kabanerio.io/v1alpha1
-    name: hello-world-1234567-1
-    Kind: KabaneroRun
-    spec:
-        type: github
-        repository:  https://github.com/user/hello-world
-        operation: Push
-        branch: master
-        stack: appsody/nodejs-0.2.2
-```
 
 Can also define logical operations when triggering a run. The logical operations map to allowed branches in the collection. For example,
 
