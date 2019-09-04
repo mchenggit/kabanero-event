@@ -372,12 +372,11 @@ The build stage uses the following built-in StageDefinition:
 
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: StageDefinition
+kind: AppsodyBuild
 metadata:
   name: appsody_build
   namespace: kabanero
 spec:
-  type: appsody_build
   resources:
     input:
       - name: source
@@ -402,12 +401,15 @@ The FVT stage uses a Tekton pipeline stage that is not associated with a collect
 
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: StageDefinition
+kind: TektonStage
 metadata:
   name: FVT
   namespace: kabanero
 spec:
-  type: TektonPipeline 
+  resources:
+    input:
+      - name: image
+        type: docker
   pipelineName: TEST
   pipelineNamespace kabanero
 ```
@@ -418,12 +420,15 @@ The SVT stage makes use of another Tekton pipeline.
 
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: StageDefinition
+kind: TektonStage
 metadata:
   name: SVT
   namespace: kabanero
 spec:
-  type: TektonPipeline
+  resources:
+    input:
+      - name: image
+        type: docker
   pipelineName: SYSTEM_TEST
   pipelineNamespace kabanero
 ```
@@ -434,12 +439,11 @@ For the purpose of this sample, the Approval Stage is a custom stage  installed 
 
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: StageDefinition
+kind: EamilApprovalStage
 metadata:
   name: deploy_approval
   namespace: kabanero
 spec:
-  type: email_aproval
   resources:
     input:
       - name: approvers
@@ -452,12 +456,18 @@ The Deploy stage makes use of another Tekton pipeline:
 
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: StageDefinition
+kind: TektonStage
 metadata:
   name: deploy
   namespace: kabanero
 spec:
-  type: TektonPipeline
+  resources:
+    input:
+      - name: app
+        type: docker
+    output:
+      - name: app_tagged
+        type: docker
   pipelineName: Deploy
   pipelineNamespace kabanero
 ```
@@ -490,8 +500,8 @@ spec:
       - name: approver_emails
         type: string
   - stage_bindings:
-    - stageDefinition: appsody_build
-      stageName: Build
+    - stageName: appsody_build
+      stageKind: AppsodyBuild
       resourceBindings:
         - inputBinding:
             - stageVariable: source
@@ -508,8 +518,8 @@ spec:
             value:  Build
           - attributge: status
             value: $stage_status
-    - stageDefinition: FVT
-      name: FVT
+    - stageName: FVT
+      stageKind: TektonStage
       resourceBindings:
         - inputBinding:
            - stageVaraible: image
@@ -525,7 +535,8 @@ spec:
             value:  FVT
           - attributge: status
             value: $stage_status
-    - stageDefinition: SVT
+    - stageName: SVT
+      stageKind: TektonStage
       name: SVT
       resourceBindings:
         - inputBinding:
@@ -542,8 +553,27 @@ spec:
             value:  SVT
           - attributge: status
             value: $stage_status
-    - stageDefinition: deploy
-      name: Deploy
+    - stageName: Approval
+      stageKind: EmailApprovalStage
+      triggers:
+          - trigger
+            - attribute: name
+              value: "FVT"
+            - attribute: status
+              value: "Success"
+          - trigger
+            - attribute: name
+              value: "SVT"
+            - attribute: status
+              value: "Success"
+      emit:
+        - event:
+          - attribute: name
+            value:  Deploy
+          - attributge: status
+            value: $stage_status
+    - stageName: Deploy
+      stageKind: TektonStage
       resourceBindings:
         - outputBinding:
            - stageVaraible: image
@@ -636,7 +666,8 @@ metadata:
   name: appsody_build_201909030817000
   namespace: kabanero
 spec:
-  stage: appsody_build
+  stageName: appsody_build
+  stageKind: AppsodyBuildStage
   contextID: 201909030817000
   strategy_run: main_201909030817000
 ```
@@ -702,9 +733,41 @@ Each run of the strategy and the associated stages is under a different context.
 
 #### Adding a Custom Stage
 
-Here are the steps to create and install a custom stage:
+The first step to creating a custom stage is to define a custom resource for the stage. The custom resource must contain the declarations of the with the input and output resources, but may contain more configuration attributes for the particular stage.  Say we wish to define a stage that builds 3 different platforms. Its custom resource definition may look like:
 
-### Configuring web hook
+```
+apiVersion: kabanero.io/v1alpha1
+kind: MultiPlatformBuild
+metadata:
+  name: multi-platform-build
+  namespace: kabanero
+spec:
+  resources:
+    input:
+      - name: source
+        type: github
+    output:
+      - name: image_amd64
+        type: docker
+      - name: image_ppcl3
+        type: docker
+      - name: image_os390
+        type: docker
+```
+
+The next step is to develop a Kubernetes controller that reacts to changes to the StageRun resource. Upon the creation of the StageRun resource, the controller will
+- determine whether it needs to handle the run by matching the stage in the Strategy resource.
+- If it needs to handle the run
+  - Start to listen for trigger event
+  - Once triggered, carry out action of the stage
+  - When action is completed, emit end of action event.
+
+If the StageRun resource is deleted, the controller cancels any ongoing action, and stops to listen for trigger events.
+
+**TBD: A stage development library will be useful**
+
+
+### Webhook Setup
 
 To set up web hooks to github, create and apply a GithubEventSource. Here is an example for setting up an organizational web hook:
 
