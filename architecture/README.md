@@ -291,6 +291,7 @@ For Github and Github Enterprise:
 
 #### Support for existing Openshift technologies
 
+
 **This is currently out of scope.**
 - Build technologies:
   - s2i
@@ -309,29 +310,397 @@ For Github and Github Enterprise:
 
 Kabanero hosts an event infrastructure to allow system components to communicate with each other asynchronously. This enables an extensible framework whereby event topics, producers, and consumers may be added to implement additional system level function. 
 
-The built-in event topics include:
-- SourceRepository topic with events related to changes in source code repository.
-- KabaneroManagement topic with Kabanero Management API related events.
-- KabaneroClient topic with Kabanero Client API related events.
-- KubernetesAPI topic with Kubernetes API related events.
-- Pipeline topic with events related to pipeline execution.
+One key component enabled by events is the Devops Strategy component, which allows the solution architect to link different devops stages via events to form a larger devops process. We will start with a sample usage scenario for a multi-stage devops strategy, and show how the stages are configured.  This is followed by more detailed design.
 
-The built-in event consumers include:
-- A SourceRepository events consumer that initiates pipeline runs.
-- A Pipeline status consumer that listens for KubernetesAPI events, and emits Pipeline events.
+### Sample Devops Strategy
 
-Additional use cases may be added in the future. For example, 
-- Support additional source repositories and pipelines
-- Report status of various components to a slack channel
-- Sending urgent notifications to a user
+Shown in the diagram below is a sample Devops Strategy involving multiple stages: 
+
+![StateGraphWithResources](StateGraphWithResources.jpg)
 
 
+The sample strategy is defined by the devops architect, and is consist of:
+- A build stage that performs an appsody build
+- If the build succeeds, two additional stages are run in parallel: FVT and SVT, which are both Tekton pipelines.
+- Once both stages complete successfully, a `Deploy_Approval` stage is used to get manual approval. This stage is implemented via custom code.
+- Once approved, the `Deploy` stage is used to perform deployment via another Tekton pipeline.
 
-### Build Pipeline Scenario 
+Each of these stages is triggered by one or more events, and emits additional events upon completion of the stage. Note that:
+- Parallel operations are possible when one event trigger more than one subsequent stages, such as FVT and SVT.
+- A stage may be triggered by more than one event, supporting "AND" relationship, such as Deploy_Approval.
+- Currently  the `OR` relationship is not yet defined, where a stage may be triggered by one of many events. 
+- Circular loop across stages is also not yet undefined.
+- Though not shown, compensation stages may be defined by with events for failed stages.
 
-In this section, we present the first use cases to be supported via events, which is triggering build pipelines. Let's first describe how a web hook is configured, and what happens from commit to the source repository to initiating a build.
 
-#### Configuring web hook
+Each stage defines a set of input and output resources. Variables at the strategy level may be used to bind to resources at each of the stages. For example,
+- the `source` variable resolves to the input repository of the `Build` stage.
+- the `app` variable resolves to the output resource of the `Build` stage, and input resources of the `FVT`, `SVT`, and `Deploy` stages.
+- The `email` variable resolves to the input of the `Deploy_Approved` state.
+- The `app_tagged` variable resolves to the output resource of the `Deploy` stage.
+
+A strategy is activated by defining external events to trigger its execution. In our sample, it is activated by Push events created as a result of push to a github repository.  Each Push event initiates a new instance of the strategy.
+
+### Configuring Sample Strategy
+
+Another way to express the sample strategy is via a state diagram that look like:
+![State Diagram](StateDiagram.jpg)
+
+
+The devops architect defines the strategy as follows:
+- Choose the lower level processes that will make up each stage. Examples include Tekton pipeline, and custom code.
+- Define the strategy event triggers for each stage, and the output strategy events
+- Define the mapping of strategy wide variables to per-stage variables.
+
+The devops architect activates the strategy by defining external event triggers (such as Push), and mapping of external events to actual values in strategy side variables.
+
+
+#### Incorporating Stages into a Strategy
+
+A `stage` implements a specific devops operation, may contain input/output resources, and is configured via a custom resource. Kabanero comes with a set of pre-defined stages, which include:
+- A stage to perform appsody build
+- A stage to run arbitrary Tekton pipeline
+
+ In addition, the framework is extensible to allow custom stages to be deployed.  The devops architect incorporates the stages needed to implement the strategy.
+
+
+For our sample, the architect picks the following stages:
+
+##### Build stage
+
+The build stage uses the following built-in StageDefinition:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageDefinition
+metadata:
+  name: appsody_build
+  namespace: kabanero
+spec:
+  type: appsody_build
+  resources:
+    input:
+      - name: source
+        type: github
+    output:
+      - name: image
+        type: docker
+```
+
+The implementation of the Appsody build stage does the following:
+- Fetch `appsody-config.yaml` from the `source` repository
+- Find the value of the `stack` attribute in `appsody-config.yaml`, for example, `appsody/node-js:0.2.2.`
+- Find matching collection using exact match
+- Find build pipeline for the given stack that matches `pipeline` variable.
+- Builds the application image and stores it under `image`
+
+**TBD:**: If there are more than 1 build pipeline per collection, will need a new variable to track which pipeline to use.
+
+##### FVT stage
+
+The FVT stage uses a Tekton pipeline stage that is not associated with a collection.  It specifies the name and namespace of the pipeline. The input/output resources of the stage are the same as the pipeline. 
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageDefinition
+metadata:
+  name: FVT
+  namespace: kabanero
+spec:
+  type: TektonPipeline 
+  pipelineName: TEST
+  pipelineNamespace kabanero
+```
+
+##### SVT Stage
+
+The SVT stage makes use of another Tekton pipeline.  
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageDefinition
+metadata:
+  name: SVT
+  namespace: kabanero
+spec:
+  type: TektonPipeline
+  pipelineName: SYSTEM_TEST
+  pipelineNamespace kabanero
+```
+
+##### Approval Stage
+
+For the purpose of this sample, the Approval Stage is a custom stage  installed by the devops architect. It requires an input variable `approvers`, for the email address of the approvers. Its function is to send email to list of approvers, and to update the status of the approval once one of the approvers replies with approval.
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageDefinition
+metadata:
+  name: deploy_approval
+  namespace: kabanero
+spec:
+  type: email_aproval
+  resources:
+    input:
+      - name: approvers
+        type: string
+```
+
+##### Deploy Stage
+
+The Deploy stage makes use of another Tekton pipeline:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageDefinition
+metadata:
+  name: deploy
+  namespace: kabanero
+spec:
+  type: TektonPipeline
+  pipelineName: Deploy
+  pipelineNamespace kabanero
+```
+
+
+#### Defining a Strategy 
+
+To describe how the different stages are to work together, the devops architect creates the StrategyDefinition, which contains:
+- strategy wide variables 
+- Binding of strategy wide variables to per-stage resources
+- Event triggers for each stage
+- Events emitted for each stage.
+
+Here is an example:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyDefinition
+metadata:
+  name: main
+  namespace: kabanero
+spec:
+  - stage_variables:
+      - name: "src_repo"
+        type: "Github"
+      - name: "app_image"
+        type: "image"
+      - name: "app_image_tagged"
+        type: "image"
+      - name: approver_emails
+        type: string
+  - stage_bindings:
+    - stageDefinition: appsody_build
+      stageName: Build
+      resourceBindings:
+        - inputBinding:
+            - stageVariable: source
+              strategyVariable: repo
+        - outputBinding:
+            - stageVariable: image
+              strategyVariable: app
+      triggers:
+          - attribute: name
+            value: "Start_Build"
+      emit:
+        - event:
+          - attribute: name
+            value:  Build
+          - attributge: status
+            value: $stage_status
+    - stageDefinition: FVT
+      name: FVT
+      resourceBindings:
+        - inputBinding:
+           - stageVaraible: image
+             strategyVariable: app_image
+      triggers:
+          - attribute: name
+            value: "Build"
+          - attribute: status
+            value: "Success"
+      emit:
+        - event:
+          - attribute: name
+            value:  FVT
+          - attributge: status
+            value: $stage_status
+    - stageDefinition: SVT
+      name: SVT
+      resourceBindings:
+        - inputBinding:
+           - stageVaraible: image
+             strategyVariable: app_image
+      triggers:
+          - attribute: name
+            value: "Build"
+          - attribute: status
+            value: "Success"
+      emit:
+        - event:
+          - attribute: name
+            value:  SVT
+          - attributge: status
+            value: $stage_status
+    - stageDefinition: deploy
+      name: Deploy
+      resourceBindings:
+        - outputBinding:
+           - stageVaraible: image
+             strategyVariable: app_image_tagged
+      triggers:
+          - trigger
+            - attribute: name
+              value: "deploy_approval"
+            - attribute: status
+              value: "Success"
+      emit:
+        - event:
+          - attribute: name
+            value:  Deploy
+          - attributge: status
+            value: $stage_status
+```
+
+
+#### Strategy Trigger
+
+A strategy trigger defines an external trigger for the strategy:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyTrigger
+metadata:
+  name: main
+  namespace: kabanero
+spec:
+  - strategy: main
+  - events:
+    - trigger:
+       attribute: name
+       value : Push
+       filter:
+          - attribute: branch
+            allowed: master
+            disallowed: *test
+       variableBindings: 
+          - name: src_repo
+            location: $event.resource
+            branch: ${event.branch}
+            commit: ${event.commit}
+          - name: app_image
+            location: ${docker_registry}/{$event.repoisotry}
+          - name: app_image_tagged
+            location: ${docker_registry}/${event.repository}:${event.commit}
+          - name: approver_emails
+            value: "champ@mycompany.com"
+        emit: 
+          attribute: name
+          value: Start_build
+```
+
+#### Strategy Runs
+
+Each trigger of the strategy creates a running strategy instance. Strategy Runs may also be created manually. 
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: main_201909030817000
+  namespace: kabanero
+spec:
+  strategy: main
+  contextID: 201909030817000
+  variables: 
+    - name: src_repo
+      location: https://www.github.com/user/hello-world
+      commit: 12345
+    - name: app_image
+      location: mydocker-registry.com/hello-world
+    - name: app_image_tagged
+      location: mydocker-registry.com/hello-world:12345
+    - name: approver_emails
+      value: "champ@mycompany.com"
+  emit: 
+    attribute: name
+    value: Start_build
+```
+
+The controller for StrategyRun also creates a run for each stage.  For example:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageRun
+metadata:
+  name: appsody_build_201909030817000
+  namespace: kabanero
+spec:
+  stage: appsody_build
+  contextID: 201909030817000
+  strategy_run: main_201909030817000
+```
+
+The controller for each stage processes the creation of StageRun by:
+- listening for event triggers for the stage. 
+- After trigger, perform the actions of the stage by creating and running additional resources, such as Tekton pipeline
+- Emit completion events after completion of the action.
+
+#### Status of Strategy Runs
+
+Each of the StrategyRun and StageRun resource is expected to update the status of the run. For example,
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: main_123456
+  namespace: kabanero
+spec:
+  strategy: main
+  contextID: 201909030817000
+  variableBindings: 
+    - name: src_repo
+      location: https://www.github.com/user/hello-world
+      commit: 12345
+    - name: app_image
+      location: mydocker-registry.com/hello-world
+    - name: app_image_tagged
+      location: mydocker-registry.com/hello-world:12345
+    - name: approver_emails
+      value: "champ@mycompany.com"
+  emit: 
+    attribute: name
+    value: Start_build
+  status:
+    state: in-pgoress
+    stages:
+      - stage: Build
+        status: success
+      - stage: FVT
+        status: failed
+
+```
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageRun
+metadata:
+  name: appsody_build_abcdefg12345
+  namespace: kabanero
+spec:
+  stage: appsody_build
+  contextID: 201909030817000
+  strategy_run: main_123456
+status:
+  status: Success
+```
+
+
+
+
+
+### Configuring web hook
 
 To set up web hooks to github, create and apply a GithubEventSource. Here is an example for setting up an organizational web hook:
 
@@ -397,127 +766,6 @@ An event for a PullRequest may be:
 - action: action associated with pull request
 - branch: master
 - rawData: JSON of the request
-```
-
-#### Kabanero Repository event Listener
-
-The Kabanero Repository event listener receives the event, and creates a new KabaneroRun CRD instance to start the build. The KabaneroRun CRD makes it easy to initiate a new build, no matter how it's triggered. It only requires input identifying which part of source code to build. Underneath the covers, it matches the source code to pre-configure build pipeline, and starts the build.
-
-Here is an example for a `Push`:
-```
-apiVersion: kabanerio.io/v1alpha1
-    name: hello-world-1234567-1
-    Kind: KabaneroRun
-    spec:
-        type: github
-        repository:  https://github.com/myorg/hello-world
-        operation: Push
-        branch: master
-        sha:   1234567  
-```
-
-And for a PullRequest: 
-```
-    apiVersion: kabanerio.io/v1alpha1
-    name: hello-world-1234567-1
-    Kind: KabaneroRun
-    spec:
-        type: github
-        repository:  https://github.com/myorg/hello-world
-        operation: PullRequest
-        pullRequest: <info about PR>
-```
-
-#### Kabanero Operator
-
-The Kabanero operator reacts to the creation of KabaneroRun resource, and starts a build as follows:
-- Fetch appsody-config.yaml (or possibly some other yaml) to get the stack name. For example, appsody/nodejs-0.2.2.
-- Use the name of the stack to find a matching collection. The default policy is exact match. Other matching policies may be provided in the future.
-- Find the pipeline associated with the collection. For now, it'll be limited to a Tekton pipeline:
-   - **TBD:** Assume it's a build pipeline with one source repository input, and one output image
-   - **TBD:** Assume same pipeline can be used for both Push and PullRequest build, or we'll need updated collection with two pipelines.
-- Start a new run of the Pipeline. For Tekton this means:
-   - Creating a new PipelineResource for the input repository
-   - Creating a new PipelineResource for the output docker image
-      - The name of the output image is ${default-docker-registry}/${repository-name}/${repository-name}:${source-id}
-      - The variable `default-docker-registry` is part of Kabanero configuration.
-      - The variable `repository-name` is built in,  derived from the SourceRepository. In this case, `hello-world`.
-      - The variable `source-id` is a unique identifier of the source. For github, this is commit's SHA.
-      - For our example, the name of the docker registry may be: `docker-registry.default.svc:5000/hello-world/hello-world:1234567`
-   - Create a new PipelineRun to start the run
-   - Monitor the status of PipelineRun and update the summary in the status field of KabaneroRun.
-
-The Kabanero operator uses annotations to track the actual pipeline instance created, and uses the status to update the overall status of the build. For our example, the annotation `kabanerio.io/pipeline-resources` lists all the resources that was automatically created to enable the build to run. 
-
-```
-apiVersion: kabanerio.io/v1alpha1
-    name: hello-world-1234567-1
-    Kind: KabaneroRun
-    metadata:
-        annotations: 
-            - kabanerio.io/pipeline-resources:
-                - kabanero.io/resource-name: hello-world-1234567-1
-                  kabbanero.io/resoruce-kind: PipelineRun
-                - kabanero.io/resource-name: hello-world-git-source-1234567-1
-                  kabbanero.io/resoruce-kind: PipelineResource
-                - kabanero.io/resource-name: hello-world-docker-image-1234567-1
-                  kabbanero.io/resoruce-kind: PipelineResource
-    spec:
-        type: github
-        repository:  https://github.com/myorg/hello-world
-        operation: Push
-        branch: master
-        sha:   1234567  
-    status:
-        state: in-progress
-```
-
-The kabanero operator also reacts to changes to the KabaneroRun resource instance:
-- When the instance is created, create the pipeline resources to match the specification change.
-- When the instance is deleted, delete pipeline resources associated with  this run.
-- Currently it does not support modifying the instance.
-
-#### Other Ways to Trigger a Build
-
-Other triggers include:
-- Manually by apply a new KabaneroRun resource
-- Programmatically by some other service or event listener. For example, a button set up on github repository may invoke a REST call to a service that starts a manual run on the repository.
-
-
-#### Additional Options on KabaneroRun:
-
-One option to consider is a timer based build. For example,
-```
-apiVersion: kabanerio.io/v1alpha1
-    name: hello-world-1234567-1
-    Kind: KabaneroRun
-    spec:
-        type: github
-        repository:  https://github.com/user/hello-world
-        operation: Push
-        cron: "mm HH DD MM DW"
-        branch: integration
-```
-
-
-Can also define logical operations when triggering a run. The logical operations map to allowed branches in the collection. For example,
-
-```
-apiVersion: kabanerio.io/v1alpha1
-    name: hello-world-1234567-1
-    Kind: KabaneroRun
-    spec:
-        type: github
-        repository:  https://github.com/user/hello-world
-        operation: Timer
-        branch: master
-```
-
-
-And define the policy in the collection. Note that this is a global definition that applies to all repositories.
-```
-    operation: Timer
-    allowedBranches: integration
 ```
 
 
@@ -595,332 +843,7 @@ A namespaced resource whose namespace is allowed by `allowedNamespaces` filter, 
 
 Note: For security reasons, Kubernetes Secrets are not stored in the `resource` or `oldResource` attributes of the KubernetesAPI event.
 
-#### Topic: Pipeline
-
-The attributes are:
-- eventType: one of `startRun`, `endRun`, `modifyRun`, `deleteRun`, `statusChange`, `message`
-- `message` If eventType is `message`,  the message body contains information outside the context of a pipeline run:
-   - messageType: type of message, one of `error`, `warning`, `info`
-   - messageText: message text associated with the message.
-- For other eventTypes:
-  - `name`: name of the run
-  - `namespace`: namespace of the run 
-  - `message`: any message associated with the run.
-  
-**TBD**: For now, we will offer general messages. specific messages will involve additional calls to Kubeneretes.** 
-
-
 #### Topic: KabaneroOperator
 
 **TBD: Kabanero Operator related events**
 
-### Event Consumers
-
-#### PipelineRun SourceRepository Event Consumer
-
-The PipelineRun SourceRepository Event consumer reacts to SourceRepository events to trigger pipelines to run.  Currently it only supports Github repository events and Tekton pipeline.  The steps to define the pipeline and trigger is as follows:
-- Define Tekton Pipelines. 
-- Define the PipelineTrigger CustomResource Definition, if nedded.
-- Set up a web hook.
-
-
-##### Defining Tekton Pipeline
-
-To enable a pipeline to build from a source repository, the pipeline must have 
-- Exactly one input resource that is a Github repository
-- zero or more input resource that is a docker image
-- Zero or more output resources that are docker images.
-
-Here is an example of a Pipeline that that has one input from Github, one input docker image, and two output docker image.  Note the `annotation` annotation `kabanerio.io/stacks` and `label` `kabanerio.io/stack`. These are used later to match the resource repository to the pipeline:
-
-```
-apiVersion: tekton.dev/v1alpha1
-kind: Pipeline
-metadata:
-  annotations:
-     kabanerio.io/stacks: 
-         - appsody/nodejs-0.2.*
-  labels:
-    kabanerio.io/stack: appsody.nodejs.0.2.2
-  name: appsody-build-pipeline
-  namespace: kabanero
-spec:
-  resources:
-  - name: git-source
-    type: git
-  - name: prereq
-    type: image
-  - name: app
-  - name: image
-    type: test
-    type: image
-  tasks:
-  - name: appsody-nodejs-sample-build
-    params:
-    - name: appsody-deploy-file-name
-      value: appsody-service.yaml
-    resources:
-      inputs:
-      - name: git-source
-        resource: git-source
-      - name: docker-source
-        resource: prereq
-      outputs:
-      - name: app-image
-        resource: app
-      - name: test-image
-        resource: test
-    taskRef:
-      name: appsody-build-task
-```
-
-
-##### Defining how Pipelines are triggered
-
-##### Out of the Box Behavior
-
-The association between a SourceRepository event and a Pipeline is defined in a PipelineTrigger Custom Resource. Kabanero ships with a kabanero-default-built-in pipeline trigger. It works with Pipelines that define:
-- Exactly one input resource from source repository
-- Zero or more input docker images
-- Zero or more output docker images.
-
-Let's using this build as an example for illustration:
-- The name of the repository is: https://github.com/user/hello-world
-- The  Pipeline to be used is `appsody-nodejs-sample-build` as defined above.
-
-The defaults, which may be changed, are:
-- The default service account to run the build is `kabanero-sa`.
-- The default timeout is 1 hour
-- The default branches for which builds are triggered are `master` and `develop` to support Github and Git flow branching strategies.
-- The default events to trigger build are `Push` and `PullRequest`. (**TBD: are 2 different pipelines needed for `Push` and `PullReqest`** ? )
-- The default namespace for a build is the name of the repository, which is `hello-world`.
-- The default name of a docker image is ${default-docker-registry}/${namespace}/${repository}-${pipeline-resource}-${branch}, where  ${default-docker-registry} is the docker registry location, ${namespace} is the name space where the pipeline is running, ${pipeline-resource} is the name of the resource as defined in the Pipeline, and ${branch} is the branch being built. For our example, when building the branch `master`, the name of the input docker images is mapped to:
-  -  `docker-registry.default.svc:5000/hello-world/hello-world-prereq-master`
-  And the name of the two output images are:
-  -  `docker-registry.default.svc:5000/hello-world/hello-world-app-master`
-  -  `docker-registry.default.svc:5000/hello-world/hello-world-test-master`
-
-
-The default behavior is as follows:
-- A SourceRepository event is received, for example, 
-  - `repositoryType` : `Github`
-  - `eventName`: either  `Push` 
-  - `location`: https://www.github.ibm.com/user/hello-world
-  - `branch` : `master`
-- A new CRD instance of custom resource PipelineTriggerRun is created to initiate a new run of the pipeline, populated with the information from SourceRepositoryEvent. For example:
-```
-     apiVersion: kabanero.io/v1alpha1
-     kind: PipelineTriggerRun
-     metadata:
-       name: hello-world-master-1234
-       namespace: hello-world
-     spec:
-        repositoryType: "Github"
-        location: "https://www.github.ibm.com/user/hello-world"
-        branch: master
-```
-- The following files are extracted in order to find the The value of the attribute `stack`:
-  - `kabanero-config.yaml`. 
-  - `appsody-config.yaml` 
-- If the `stack` attribute does not exist, an error message event is emitted on the Pipeline topic because the build can not proceed.
-- Otherwise, the value of the `stack` attribute is used to locate a suitable Pipeline by matching it to a Pipeline in the following order:
-  - the value of the label `kabanero.io/stack`, after transforming the value suitable for use as a label value. For example, by changing "appsody/node-js:0.2.2" to "appsody.node.js.0.2.2" before matching.
-  - pattern matching the values of the annotation `kabanerio.io/stacks`.
-- If there is no match, or too many matches, a suitable error message is emitted. 
-- Otherwise, Pipeline Resources for the run are created: For git-source:
-```
-        apiVersion: tekton.dev/v1alpha1
-        kind: PipelineResource
-        metadata:
-          name: helo-world-mastger-1234-git-source
-          namespace: hello-world
-        spec:
-          params:
-          - name: revision
-            value: master
-          - name: url
-            value: https://github.com/user/appsody-hello-world/
-          type: git
-```
-  - For input docker image: 
-```
-        apiVersion: tekton.dev/v1alpha1
-        kind: PipelineResource
-        metadata:
-          name: hello-world-master-1234-prereq
-          namespace: hello-world
-        spec:
-          params:
-          - name: url
-          - value:   `docker-registry.default.svc:5000/hello-world/hello-world-prereq-master`.
-          type: image
-```
-  - For first output docker image:
-```
-        apiVersion: tekton.dev/v1alpha1
-        kind: PipelineResource
-        metadata:
-          name: hello-world-master-1234-app
-          namespace: hello-world
-        spec:
-          params:
-          - name: url
-          - value:   `docker-registry.default.svc:5000/hello-world/hello-world-app-master`.
-          type: image
-```
-  - For second output docker image:
-```
-        apiVersion: tekton.dev/v1alpha1
-        kind: PipelineResource
-        metadata:
-          name: hello-world-master-1234-test
-          namespace: hello-world
-        spec:
-          params:
-          - name: url
-          - value:   `docker-registry.default.svc:5000/hello-world/hello-world-test-master`.
-          type: image
-```
- - A new PipelineRun is created to initiate the run:
-```
-apiVersion: tekton.dev/v1alpha1
-kind: PipelineRun
-metadata:
-  annotation:
-      kabanerio.io/pipelinetrigger : "kabanero-default-built-in"
-  name: hello-world-master-1234
-  namespace:  hello-world
-spec:
-  pipelineRef:
-  - name: appsody-nodejs-sample-build
-  resources:
-  - name: git-source
-    resourceRef:
-      name: hello-world-master-1234-git-source
-  - name: prereq
-    resourceRef:
-      name: hello-world-master-1234-prereq
-  - name: app
-    resourceRef:
-      name: hello-world-master-1234-app
-  - name: test
-    resourceRef:
-      name: hello-world-master-1234-test
-  serviceAccount: kabanero-sa
-  timeout: 1h0m0s
-
-```
-
-
- **TBD: May be enhanced to provide per-branch default values**
-
-
-##### Time based triggers
-
-Here is an example of a time based trigger:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: PipelineTrigger
-metadata:
-  name: my-pipeline-nightly-trigger
-  namespace: kabanero
-spec:
-   repositorySelector:
-    type: git
-    triggers:
-      - type: cron
-        interval: "mm HH DD MM DW"
-        repositories:
-          - repository: https://github.com/hello-world
-            branches: 
-               - "develop"
-```
-
-##### Changing Defaults
-
-Defaults may be changed via a ConfigMap. Here is the out of the box default:
-
-```
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: kabanero.pipeline.trigger.default.values
-  namespace: kabanero
-data:
-  repositoryType: git
-    default-namespace: ${repository-name}
-    default-Source-repository-config-files:
-      - .kabanero-config.yaml
-      - .appsody-config.yaml
-    default-allowed-branches-push: 
-      - master
-    default-allowed-branches-pull-request: 
-      - master
-      - develop
-  resourceType: image
-      default-image-name: ${default-docker-registry}/${namespace}/${repository}-${pipeline-resource}-${branch}
-  variables:
-    - name: default-docker-registry: 
-      value: docker-registry.default.svc:5000
-  - pipelineType: Tekton
-      default-service-account: kabanero-sa
-      default-timeout: 1h0m
-```
-
-
-##### Specification of PipelineTrigger
-
-
-
-##### Configuring Webhooks
-
-To set up web hooks to github, create and apply an EventSource. Here is an example for setting up an organizational web hook:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: EventSource
-metadata:
-  name: myorg-github
-  namespace: kabanero
-spec:
-    type: git
-    url: https://github.com/enterprises/myorg
-    secret: myorg-github
-```
-
-Here is an example to set up a per-repository web hook to Github as an event source. In addition, it also configures which events from Github are to be emitted:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: EventSource
-metadata:
-  name: user-hello-world-github
-  namespace: kabanero
-spec:
-    type: git
-    url: https://github.com/user/hello-world
-    apiSecret: user-hello-world-github
-    allowedEvents:
-        - Push
-        - PullRequest
-```
-
-The `apiSecret` is the authentication token required to authenticate with Github to add or modify the webhook. **NOTE:** Additional secrets may need to be configured, such as ssh, to enable some pipelines.
-
-The status shows whether or not the web hook is configured. For example:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: EventSource
-metadata:
-  name: myorg-github
-  namespace: kabanero
-spec:
-    type: git
-    url: https://github.com/enterprises/myorg
-    apiSecret: myorg-github-api
-status:
-    webhook-configured: false
-    details: "Unable to connect to https://github.com/enterprise/myorg due to failure to authenticate"
-```
-
-Once configured, the web hook listener will emit SourceRepositoryEvents
