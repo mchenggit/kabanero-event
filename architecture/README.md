@@ -59,7 +59,7 @@ Kabanero automates the devops infrastructure as much as possible. It will
 
 Kabanero is secure. It supports:
   - login with different identity providers, for example, login with Github user ID, or with internal user registry
-  - Role Based Access Control(RBAC) for different roles, for example, role of solution architect, and role of application developer.
+  - Role Based Access Control(RBAC) for different roles, for example, role of devops architect, and role of application developer.
   - security audit
   - automatic security scans for source code and binaries.
 
@@ -310,7 +310,7 @@ For Github and Github Enterprise:
 
 Kabanero hosts an event infrastructure to allow system components to communicate with each other asynchronously. This enables an extensible framework whereby event topics, producers, and consumers may be added to implement additional system level function. 
 
-One key component enabled by events is the Devops Strategy component, which allows the solution architect to link different devops stages via events to form a larger devops process. We will start with a sample usage scenario for a multi-stage devops strategy, and show how the stages are configured.  This is followed by more detailed design.
+One key component enabled by events is the Devops Strategy component, which allows the devops architect to link different devops stages via events to form a larger devops strategy. We will start with a sample usage scenario for a multi-stage devops strategy, and show how the stages are configured.  This is followed by more detailed design.
 
 ### Sample Devops Strategy
 
@@ -480,7 +480,7 @@ metadata:
   name: main
   namespace: kabanero
 spec:
-  - stage_variables:
+  - strategy_variables:
       - name: "src_repo"
         type: "Github"
       - name: "app_image"
@@ -696,9 +696,13 @@ status:
   status: Success
 ```
 
+#### Tracking context
 
+Each run of the strategy and the associated stages is under a different context.  The contextID is created and stored as part of each StrategyRun and StageRun resource.  In addition, the contextID is an implicit attribute stored within each intra-strategy event (such as Build, FVT, etc). This allows the implementations of each stage to distinguish between different runs. 
 
+#### Adding a Custom Stage
 
+Here are the steps to create and install a custom stage:
 
 ### Configuring web hook
 
