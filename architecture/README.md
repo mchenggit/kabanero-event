@@ -312,10 +312,200 @@ Kabanero hosts an event infrastructure to allow system components to communicate
 
 One key component enabled by events is the Devops Strategy component, which allows the devops architect to link different devops stages via events to form a larger devops strategy. We will start with a sample usage scenario for a multi-stage devops strategy, and show how the stages are configured.  This is followed by more detailed design.
 
-### Sample Devops Strategy
+### Sample One Stage Build
+
+![One Stage Build](OneStageBuild.jpg)
+
+
+1: Register Webhook
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: GithubEventSource
+metadata:
+  name: user-hello-world-github
+  namespace: kabanero
+spec:
+    url: https://github.com/user/hello-world
+    apiSecret: user-hello-world-github-api
+```
+
+2. Webhook listener receives web hook POST and emits Push event
+
+
+3. controller for StrategyTrigger receives Push Event. 
+
+It uses StrategyTrigger CRD to decide how to generate StrategyRun CRD:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyTrigger
+metadata:
+  name: one_stage
+  namespace: kabanero
+spec:
+  - strategy: one_stage
+  - events:
+    - trigger:
+       attribute: name
+       value : Push
+       filter:
+          - attribute: branch
+            allowed: master
+            disallowed: *test
+       variableBindings: 
+          - name: source
+            location: ${event.resource}
+            branch: ${event.branch}
+            commit: ${event.commit}
+          - name: app
+            location: ${docker_registry}/{$event.repoisotry}
+        emit: 
+          attribute: name
+          value: Start_build
+```
+
+And this is the CRD for the One_stage strategy:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyDefinition
+metadata:
+  name: main
+  namespace: kabanero
+spec:
+  - strategy_variables:
+      - name: "source"
+        type: "Github"
+      - name: "app"
+        type: "image"
+  - stage_bindings:
+    - stageName: appsody_build
+      stageKind: AppsodyBuild
+      resourceBindings:
+        - inputBinding:
+            - stageVariable: source
+              strategyVariable: source
+        - outputBinding:
+            - stageVariable: image
+              strategyVariable: app
+      triggers:
+          - attribute: name
+            value: "Start_Build"
+      emit:
+        - event:
+          - attribute: name
+            value:  Build
+          - attributge: status
+            value: $stage_status
+```
+
+And this is the CRD for AppsodyBuild stage:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: AppsodyBuild
+metadata:
+  name: appsody_build
+  namespace: kabanero
+spec:
+  resources:
+    input:
+      - name: source
+        type: github
+    output:
+      - name: image
+        type: docker
+```
+
+
+And the generated StrategyRun:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: one_stage_201909030817000
+  namespace: kabanero
+spec:
+  strategy: one_stage
+  contextID: 201909030817000
+  variables: 
+    - name: source
+      location: https://www.github.com/user/hello-world
+      commit: 1234
+    - name: app
+      location: mydocker-registry.com/hello-world
+  emit: 
+    attribute: name
+    value: Start_build
+status:
+    statue: in-progress
+```
+
+5. The controller for Strategy creates StageRun for each stage, and emits Start_build event:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageRun
+metadata:
+  name: appsody_build_201909030817000
+  namespace: kabanero
+spec:
+  stageName: appsody_build
+  stageKind: AppsodyBuildStage
+  contextID: 201909030817000
+  strategy_run: one_stage_201909030817000
+status:
+  state: in-progress
+```
+
+6. The controller for AppsodyBuild stage creates uses StageRun and StrategyRun to find the values of its variables to generate Tekton PipelineResource and PipelineRun to start the build.
+
+
+On next PUsh to github, Push(5678) is received:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: one_stage_201909031252000
+  namespace: kabanero
+spec:
+  strategy: one_stage
+  contextID: 201909031252000
+  variables: 
+    - name: source
+      location: https://www.github.com/user/hello-world
+      commit: 5678
+    - name: app
+      location: mydocker-registry.com/hello-world
+  emit: 
+    attribute: name
+    value: Start_build
+status:
+    statue: in-progress
+```
+
+The controller for StrategyRun also creates a run for each stage.  For example:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageRun
+metadata:
+  name: appsody_build_201909031252000
+  namespace: kabanero
+spec:
+  stageName: appsody_build
+  stageKind: AppsodyBuild
+  contextID: 201909031252000
+  strategy_run: one_stage_201909031252000
+status:
+  state: in-progress
+```
+
+The Appsody Stage controller creates TektonResource and PipelineRun to start the run.
+
+
+### Sample Multi-stage Devops Strategy
 
 Shown in the diagram below is a sample Devops Strategy involving multiple stages: 
-
 ![StateGraphWithResources](StateGraphWithResources.jpg)
 
 
