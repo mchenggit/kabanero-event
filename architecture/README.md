@@ -335,7 +335,7 @@ spec:
 
 3. controller for StrategyTrigger receives Push Event. 
 
-It uses StrategyTrigger CRD to decide how to generate StrategyRun CRD:
+It uses StrategyTrigger CRD to do event filtering and variable substitution ang generate StrategyRun CRD:
 
 ```
 apiVersion: kabanero.io/v1alpha1
@@ -365,12 +365,52 @@ spec:
           value: Start_build
 ```
 
-And this is the CRD for the One_stage strategy:
+
+And the generated StrategyRun:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: one_stage_201909030817000
+  namespace: kabanero
+spec:
+  strategy: one_stage
+  contextID: 201909030817000
+  variables: 
+    - name: source
+      location: https://www.github.com/user/hello-world
+      commit: 1234
+    - name: app
+      location: mydocker-registry.com/hello-world
+  emit: 
+    attribute: name
+    value: Start_build
+status:
+    statue: in-progress
+```
+
+5. The controller for Strategy creates StageRun for each stage, and emits Start_build event:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageRun
+metadata:
+  name: appsody_build_201909030817000
+  namespace: kabanero
+spec:
+  stageName: appsody_build
+  stageKind: AppsodyBuildStage
+  contextID: 201909030817000
+  strategy_run: one_stage_201909030817000
+status:
+  state: in-progress
+```
+
+And this is the CRD for the One_stage strategy that is used to look up the stages:
 ```
 apiVersion: kabanero.io/v1alpha1
 kind: StrategyDefinition
 metadata:
-  name: main
+  name: one_stage
   namespace: kabanero
 spec:
   - strategy_variables:
@@ -416,47 +456,7 @@ spec:
         type: docker
 ```
 
-
-And the generated StrategyRun:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyRun
-metadata:
-  name: one_stage_201909030817000
-  namespace: kabanero
-spec:
-  strategy: one_stage
-  contextID: 201909030817000
-  variables: 
-    - name: source
-      location: https://www.github.com/user/hello-world
-      commit: 1234
-    - name: app
-      location: mydocker-registry.com/hello-world
-  emit: 
-    attribute: name
-    value: Start_build
-status:
-    statue: in-progress
-```
-
-5. The controller for Strategy creates StageRun for each stage, and emits Start_build event:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StageRun
-metadata:
-  name: appsody_build_201909030817000
-  namespace: kabanero
-spec:
-  stageName: appsody_build
-  stageKind: AppsodyBuildStage
-  contextID: 201909030817000
-  strategy_run: one_stage_201909030817000
-status:
-  state: in-progress
-```
-
-6. The controller for AppsodyBuild stage creates uses StageRun and StrategyRun to find the values of its variables to generate Tekton PipelineResource and PipelineRun to start the build.
+6. The controller for AppsodyBuild uses StageRun and StrategyRun to listen for the events, and find the values of its variables to generate Tekton PipelineResource and PipelineRun to start the build.
 
 
 On next PUsh to github, Push(5678) is received:
