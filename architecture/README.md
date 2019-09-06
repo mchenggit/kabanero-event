@@ -330,15 +330,23 @@ For this scenario:
 - the source repository contains the name and version of the stack, e.g., appsody/node-js:0.2.2
 - There is an exact match from the strategy/stack to the configured collection.
 
+The resources for a strategy are applied when it has been triggered.
+**TBD: Garbage collection?**
+
+Note: If the Strategy triggers are organization or repository specific, put them in a separate repo. They are applied during initialization of Kabanero. A "Strategy Trigger" strategy can be used to update the triggers when it changes. 
+
 No semantic versioning
-  - Can inadvertently go back to old version if active version changes.
-  - No good way reproduce original build: how to track which version is used to build which commit.
-  - How to wait for apps that fail on the new version?
+  - Changing version based on Pull Request to update the exact version. (Can be automated.)
+  - Won't accidentally go back to old version if available version changes.
+  - Can easily reproduce the original build on rebuild.
+  - Applications that fail on new version can be fixed at their own pace.
 
 Can provide pre-defined strategies. For example,
 - One-stage strategy
    - Build-only
    - calling other CI/CD, such as Jenkins Strategy
+- Github branching strategy
+- Gitflow branching strategy
 - Jenkins-X strategy: Jenkins-x Dev, Jenkins-X stage, Jenkins-X prod
 
 Jenkin-X uses Github repositories and PullRequest to manage devops stages and stage promotions. 
@@ -351,16 +359,13 @@ Above is an example of the three stages of a typical Jenkins-X pipeline.
 - The PullRequest for the prod stage is generated, and triggers a pre-production test ( if needed).   If successful, and the PullRequest is merged, the final pipeline deploys to production.
 
 
-The resources for a strategy are applied when it has been triggered.
-**TBD: Garbage collection?**
-
 #### Lifecycle of a collection
 
 Logically, a collection is the union of all stacks and strategies. **It is immutable once it has been put into service.** Only operation for pre-existing stacks/strategies is activate/deactivate. This makes it possible to provide consistent rebuilds. (This assumes that the old containers for the pipelines are also versioned and available, and that the Kabanero runtime is backwards compatible.)
 
 
 To put an updated collection into service:
-- Point Kabanero to updated collection.
+- Update collection strategy can be used to load the updated collection. 
 - If  deactivating some strategies/stacks:
     - Update all affected apps to use a  different strategy/stack by changing their dependent strategy/version.
     - Wait for all updates to complete.
