@@ -5,6 +5,7 @@
 * [What is Kabanero?](#What_is_Kabanero)
 * [Kabanero High Level Usage Scenarios](#Usage_Scenarios)
 * [Events Functional Specification](#Functional_Specification)
+* [Functional Specification using Gitops Principles](#Git_OPs)
 
 
 <a name="Introduction"></a>
@@ -311,6 +312,93 @@ For Github and Github Enterprise:
 Kabanero hosts an event infrastructure to allow system components to communicate with each other asynchronously. This enables an extensible framework whereby event topics, producers, and consumers may be added to implement additional system level function. 
 
 One key component enabled by events is the Devops Strategy component, which allows the devops architect to link different devops stages via events to form a larger devops strategy. We will start with a sample usage scenario for a multi-stage devops strategy, and show how the stages are configured.  This is followed by more detailed design.
+
+### Four Types of Repositories
+
+Kabanero recognizes these four types of repositories:
+1) Source repository created via Appsody
+2) A Collection repository storing collections of stacks + strategies
+   - Kabanero moving to a new version of the collection
+   - Collection repository being updated and tested
+3) source code repository not created via Appsody
+4) multiple interdependent services, each may be created via 1 or 3.
+
+#### Source code repository created via Appsody
+
+For this scenario:
+- the source repository contains the name and version of the stack, e.g., appsody/node-js:0.2.2
+- The source repository contains the name and version of the strategy to use. For example, main-strategy-1.0
+- There is an exact match from the strategy/stack to the configured collection.
+
+**TBD: About semantic versioning:
+- Should strategy be semantic versioned?
+- What does semantic version really buy you?
+- With semantic version, how do you do reproducible re-builds? 
+**
+
+Different strategies may be configured. Possible pre-defined strategies:
+- Simple one-stage strategy
+   - Build-only
+   - calling other CI/CD, such as Jenkins Strategy
+- Jenkins-X strategy: Jenkins-x Dev, Jenkins-X stage, Jenkins-X prod
+
+
+Jenkin-X uses Github repositories and PullRequest to manage devops stages and stage promotions. 
+
+![Jenkis X ](JenkinsX.jpg)
+
+Above is an example of the three stages of a typical Jenkins-X pipeline.
+- The Pull Request for dev stage triggers a build. If the build is successful, a Pull Request is made against the Staging stage, modifying the version number of the application in a configuration file.
+- The Pull Request for the Staging repository triggers a deployment and test of the given application version.  If successful, a the version number is updated for the Prod stage, and a new PullRquest is created.
+- The PullRequest for the prod stage is generated, and triggers a pre-production test ( if needed).   If successful, and the PullRequest is merged, the final pipeline deploys to production.
+
+
+#### Lifecycle of a collection
+
+Logically, a collection is the union of all stacks and strategies. **It is immutable once it has been put into service.** Only individual stacks/strategies may be activated/deactivated. This makes it possible to provide consistent rebuilds. (This assumes that the old containers for the pipelines are also versioned and available, and that the Kabanero runtime is backwards compatible.)
+
+
+To make Kabanero use an updated collection:
+- If  deactivating some strategies/stacks:
+    - Update all affected apps to use a  different strategy/stack by changing their dependent strategy/version.
+    - Wait for all updates to complete.
+- Point Kabanero to updated collection.
+
+
+To test a collection during development:
+- Provide a special "Kabanero collection testing" strategy.  
+- Upon Push or "Pull Request" of the collection, the Kabanero testing strategy takes over to run tests:
+   - Create a new "workspace" and point it to the collection being tested
+   - run tests using the collection within the new workspace 
+
+Each workspace contains its own:
+- collection repository
+- web hook listener
+- **TBD: namespaces for running the pipelines.**
+
+#### Source code repository not created via Appsody (Custom)
+
+The strategy and "stack" to be used is stored within the source repository. Pre-defined custom strategies may be created as well. For example, a "s2i" related stack and strategy. 
+
+**TBD: Since Appsody & s2i are really just about builds, should create a "build pack" stage that for all types of source repositories.  This allows creation of strategy independent of how source is built**
+
+
+#### Two Service Pipeline
+
+There are multiple ways to configure an application and test its dependent service(s). Below is an example showing one service dependent on another service:
+
+![Pipeline for TwoServices ](TwoServicePipelines.jpg)
+
+Note that: 
+- svc-a is the dependent service.  As part of its pipeline, it deploys the service in an integration environment for integration testing.
+- The application that depends on the service has its own pipeline as well.  Its FVT stage makes use of svc-a that is deployed to the integration environment.
+- Whenever the deployment of the service to the integration environment changes, a new message `Integration_A` is emitted.  
+- In our example, the message triggers a new run of the application's FVT.
+- The result of the run is broadcast as another message.  This is used to inform interested parties whether or not the latest deployment of the svc-a  is stable.  
+
+Note that there other other ways to configure the dependencies between the application and its service:
+- The Integration stage of the svc-a pipeline may be the one to emit the message
+- The processing of the Integration_A event for the application, if using repository for promotion, is to to create a PullRequest to update the FVT repository.
 
 ### Sample One Stage Build
 
@@ -1104,3 +1192,51 @@ Note: For security reasons, Kubernetes Secrets are not stored in the `resource` 
 
 **TBD: Kabanero Operator related events**
 
+
+<a name="Git_OPs"></a>
+## Functional Specification
+
+The basic tenant of Gitops is that the source repository is the source of truth.  Anything can be reproduced as long as the original is available in the source repository. Giops principles can be applied to:
+- Reproduce old builds
+- configure a running environment builds
+- Promote changes to different stages of a devops pipeline
+- Ensure running environment has not deviated from original specification
+
+### Usage Scenarios
+
+#### What strategy to apply when source code changes:
+
+The source directory shall contain a configuration file that specifies exactly which strategy to use for each event. Additional configurations may be passed to the strategy. For example, the "stack" attribute identifies which stack to use. 
+
+```
+stack: "java_microprofile:0.2.2"
+strategy: 
+    Push: appsody_build_push:0.2.2
+         version: 0.2.2
+    PullRequest: appsody_build_pr:0.2.3
+```
+
+#### Updating a stack due to security fix
+
+The content of a collection is immutable after it has been published, so that it is always possible to re-run old strategies.  Except that an index file that may be used to activate/deactivate stacks and strategies. For example:
+```
+strategies:
+   - name: appsody_build_push
+     activate: *
+     inactive: 0.2.1
+   - name: appsody_build_pr
+     activate: *
+     inactive: 0.2.1 
+stacks:
+  - name : java_microprofile:0.2.2
+    active: *
+    inactive: <= 0.2.1
+```
+
+To update a stack, the devops architect
+- publishes a new stack, e.g., java_microprofile:0.2.3
+- For each related repository:
+   - create a new branch
+   - change stack for all related applications 
+   - Create PR
+- If pipeline succeed, merge PR, otherwise, wait for developer to fix, or create a new stack.
