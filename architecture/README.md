@@ -333,13 +333,13 @@ For this scenario:
 The resources for a strategy are applied when it has been triggered.
 **TBD: Garbage collection?**
 
-Note: If the Strategy triggers are organization or repository specific, put them in a separate repo. They are applied during initialization of Kabanero. A "Strategy Trigger" strategy can be used to update the triggers when it changes. 
+Note: For strategy triggers that are organization or repository specific, put them in a separate repo. They are applied during initialization of Kabanero. A "Strategy Trigger" strategy can be used to update the triggers when it changes. 
 
 No semantic versioning
-  - Changing version based on Pull Request to update the exact version. (Can be automated.)
+  - Use Pull Request to change exact version. (Can be automated.)
   - Won't accidentally go back to old version if available version changes.
   - Can easily reproduce the original build on rebuild.
-  - Applications that fail on new version can be fixed at their own pace.
+  - Applications that fail on new version can be fixed at their own pace by adding code to Pull Request or moving to another version.
 
 Can provide pre-defined strategies. For example,
 - One-stage strategy
@@ -365,16 +365,16 @@ Logically, a collection is the union of all stacks and strategies. **It is immut
 
 
 To put an updated collection into service:
-- Update collection strategy can be used to load the updated collection. 
+- On Push , "Collection Update strategy" can be used to load the updated collection. 
 - If  deactivating some strategies/stacks:
-    - Update all affected apps to use a  different strategy/stack by changing their dependent strategy/version.
+    - Update all affected apps to use a  different strategy/stack by changing their dependent strategy/version via a Pull Request (can be automated)
     - Wait for all updates to complete.
 - Deactivate old strategy/collection.
 
 
 To test a collection during development:
 - Provide a special "Kabanero collection testing" strategy.  
-- Upon Push or "Pull Request" of the collection, the Kabanero testing strategy takes over to run tests:
+- Upon "Pull Request" of the collection, the Kabanero testing strategy takes over to run tests:
    - Create a new "workspace" and point it to the collection being tested
    - run tests using the collection within the new workspace 
 
