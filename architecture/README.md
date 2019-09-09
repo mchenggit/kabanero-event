@@ -328,7 +328,7 @@ The diagram below is meant to illustrate a variety of scenarios that are enabled
 ![Motivating Scenarios ](MotivationScenarios.jpg)
 
 First, definitions:
-- A strategy defines a single high level pipeline, and is triggered by events external to the strategy itself. For example, the strategy `Svc-A` is triggered by `Push` events generated as a result of a `Push` to a sourced repository.
+- A strategy defines a single high level pipeline, and is triggered by events external to the strategy itself. For example, the strategy `Svc-A` is triggered by `Push` events generated as a result of a `Push` to a source repository.
 - A strategy is consist of one or more `stages`, each triggered by an event internal to the strategy.
 - Each `stage` of strategy is implemented by some other tool,  such as a Travis build (not yet supported by Kanabero), or a Tekton pipeline.  
 - Though not shown in the diagram, each stage may contain input and output parameters.
