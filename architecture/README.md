@@ -4,8 +4,9 @@
 * [Introduction](#Introduction)
 * [What is Kabanero?](#What_is_Kabanero)
 * [Kabanero High Level Usage Scenarios](#Usage_Scenarios)
+* [Introduction to Event Triggered Pipeline Strategies](#Event_Intro)
 * [Events Functional Specification](#Functional_Specification)
-* [Functional Specification using Gitops Principles](#Git_OPs)
+* [Staging](#Staging)
 
 
 <a name="Introduction"></a>
@@ -69,6 +70,14 @@ Kabanero is extensible. It can be enhanced to support:
 - new source control repositories
 - new pipeline technologies
 - additional behavior based on internal events.
+
+In an enterprise where there many be hundreds or even thousands of applications,  it is not the case that every devops team is in charge of all stages of an application, though it may be for some teams. It is not the case that the same source repository branching or pipeline strategy applies to all application. And it is not the case that every application uses the same continuous integration tools. The value of Kabanero is to give the devops/solution architect a way to define the processes required to manage such disparate environments. Note that having a process is not antithetical giving teams control. Well defined processes are still required when a team has full control. Examples of such processes include:
+- Deploying latest operating system or software prerequisite security fixes.
+- Compiling and running only with per-certified prerequisites.
+- When and how to promote an application to the next stage.
+- How multiple interdependent applications work with each other.
+- How to roll out an application, e.g. helm, Gitops, or  Razee.
+- Creation and configuration of the Kubernetes namespaces to run the pipelines and host the different stages of applications.
 
 The initial version of Kabanero will support:
 - Appsody as development environment
@@ -306,12 +315,237 @@ For Github and Github Enterprise:
   - Openshift Pipelines
 
 
+<a name="Event_Intro"></a>
+## Introduction to Event Triggered Pipeline Strategies
+
+Kabanero enables a devops/solution architect to define the processes to manage a devops environment. At the center of this architecture is an event triggered pipeline strategy.
+
+###  Motivating Scenarios
+
+The diagram below is meant to illustrate a variety of scenarios that are enabled via Kabnaero.  Note it is not meant as a prescription for how to construct specific pipeline topologies:
+
+
+![Motivating Scenarios ](MotivationScenarios.jpg)
+
+First, definitions:
+- A strategy defines a single high level pipeline, and is triggered by events external to the strategy itself. For example, the strategy `Svc-A` is triggered by `Push` events generated as a result of a `Push` to a sourced repository.
+- A strategy is consist of one or more `stages`, each triggered by an event internal to the strategy.
+- Each `stage` of strategy is implemented by some other tool,  such as a Travis build (not yet supported by Kanabero), or a Tekton pipeline.  
+- Though not shown in the diagram, each stage may contain input and output parameters.
+
+The scenarios depicted in the above diagram include:
+- Parallel execution of stages, such as `FVT` and `SVT` stages of strategy `Svc-A`.
+- Manual approval before promotion to next sage, such as `Deploy_approval`.
+- Error handling, such as `FVT_Error` stage. Error handling may include creating Github issues, or sending other messages or notifications.
+- Interaction between different applications.  For our example, the application `myapp` depends on service `Svc-A`.  The owners of `Svc-A` have set up an integration environment deployed with the latest non-production `Svc-A` for integration testing. 
+  - When a new version of the service `Svc-A` is deployed to the integration environment, the event `Integration_A` is sent. This allows all interested parties to react to the event.  In our example, it triggers the strategy `myap-retest` to run to re-test `Svc-A`. The result of rerunning the test may trigger additional events to be emitted.
+- Usage of different tools for each stage.
+
+### Sample One Stage Build
+
+![One Stage Strategy](OneStageBuild.jpg)
+
+This section contains a walkthrough for how to configure a one stage strategy.
+
+#### Prerequisites
+
+When a collection is installed,  strategy CRD instances are also installed. These instances are applied and available in Kubernetes. For our example, they include:
+- Definition of the `Build` stage
+- Definition of of the `one_stage` strategy
+- Definition of how to trigger the strategy.
+
+
+The definition of the `Build` stage uses the `TektonStage` custom resource. The `TekonStage` custom resource allows Kabanero to use a Tekton pipeline as for a stage. it defines:
+- the underlying Tekton pipeline to use
+- input/output resources
+- triggering event
+- output event
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: TektonStage
+metadata:
+  name: appsody_build
+  namespace: kabanero
+spec:
+  pipeline: appsody_build
+  pipeline-namespace: kabanero
+  resources:
+    input:
+      - name: source
+        type: github
+    output:
+      - name: image
+        type: docker
+  trigger:
+    - attribute: name
+      value: Start_build
+  emits:
+    - attribute: name
+      value: Build
+    - attribute: status
+      value: $build_status
+```
+
+The StrategyDefinition CRD defines a strategy instance.  For our example, it includes:
+- strategy wide variables and their types: `source`, and `app`.
+- stages to incorporate. In our example, it is just `appsody_build` stage.
+- mapping of strategy wide resources to stage resources.
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyDefinition
+metadata:
+  name: one_stage
+  namespace: kabanero
+spec:
+  - strategy_variables:
+      - name: "source"
+        type: "Github"
+      - name: "app"
+        type: "image"
+  - stage_bindings:
+    - stageName: appsody_build
+      stageKind: TektonStage
+      stage-local-name: Build
+      resourceBindings:
+        - inputBinding:
+            - stageVariable: source
+              strategyVariable: source
+        - outputBinding:
+            - stageVariable: image
+              strategyVariable: app
+```
+
+The StrategyTrigger CRD defines:
+- event filter: what event  triggers the strategy
+- first event to emit: the first event to trigger the first stage to run
+- variable substitutions: Mapping incoming event to values of global variables.
+- **TBD:**: additional environment variables and whether variables need to be passed during event passing.
+
+StrategyTrigger for our example defines:
+- which strategy to use: `one_stage`
+- filtering to allow only Push on the master branch
+- first event to emit: `Start_build`.
+- mapping from event to values of the two resources for the input repository, and output image.
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyTrigger
+metadata:
+  name: svc-a-strategy
+  namespace: kabanero
+spec:
+  - strategy: one_stage
+  - events:
+    - trigger:
+       attribute: name
+       value : Push
+       filter:
+          - attribute: branch
+            allowed: master
+       variableBindings: 
+          - name: source
+            location: ${event.resource}
+            branch: ${event.branch}
+            commit: ${event.commit}
+          - name: app
+            location: ${docker_registry}/{$event.repoisotry}
+        emit: 
+          attribute: name
+          value: Start_build
+```
+
+#### Register Web hook
+
+Create and apply GithubEventSource.yaml to register a web hook. This example uses a repository web hook.
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: GithubEventSource
+metadata:
+  name: user-hello-world-github
+  namespace: kabanero
+spec:
+    url: https://github.com/user/hello-world
+    apiSecret: user-hello-world-github-api
+```
+
+#### Web hook Processing
+
+Kabanero Web hook listener receives web hook POST and emits Push event to the SoruceRepository topic.
+
+
+####  Push event Processing
+
+Kabanero strategy trigger Listener matches the event to `svc-a-trigger`. The listener generates the corresponding StrategyRun Resource to start the strategy.  Each trigger event creates a new instance of StrategyRun. Note that StrategyRun instance also contains values of resolved variables.
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: svc-a-strategy-201909030817000
+  namespace: kabanero
+spec:
+  strategy: one_stage
+  contextID: 201909030817000
+  variables: 
+    - name: source
+      location: https://www.github.com/user/hello-world
+      commit: 1234
+    - name: app
+      location: mydocker-registry.com/hello-world
+  emit: 
+    attribute: name
+    value: Start_build
+status:
+    statue: in-progress
+```
+
+### Running the Strategy
+
+The controller for StrategyRun finds the corresponding StrategyDefinition `one_stage`, and creates the corresponding StageRun for each stage. For our example, it is just one stage:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageRun
+metadata:
+  name: appsody_build_201909030817000
+  namespace: kabanero
+spec:
+  stageName: appsody_build
+  stageKind: AppsodyBuildStage
+  contextID: 201909030817000
+  strategy_run: one_stage_201909030817000
+status:
+  state: in-progress
+```
+
+After all the StageRun resources are created, the controller emits the `Start_build` event to trigger the first stage.
+
+
+### Running the Stages
+
+The controller for each stage is responsible for:
+- Creating listeners to listen for trigger events
+- When triggered, creating any additional resources, and run the stage.
+- When completed, emit any configure events.
+
+For our example, the controller for TektonStage  
+- Creates a listener to listen for `Start_build` event.
+- When `Start-build` event is received, creates Tekton relates resources to start the pipeline:
+   - `PipelineResource`
+   - `PipelineRun`
+- When the Tekton pipeline completes, emits `Build` event.
+
+
 <a name="Functional_Specification"></a>
 ## Events Functional Specification
 
 Kabanero hosts an event infrastructure to allow system components to communicate with each other asynchronously. This enables an extensible framework whereby event topics, producers, and consumers may be added to implement additional system level function. 
 
-One key component enabled by events is the Devops Strategy component, which allows the devops architect to link different devops stages via events to form a larger devops strategy. We will start with a sample usage scenario for a multi-stage devops strategy, and show how the stages are configured.  This is followed by more detailed design.
+
+One key component enabled by events is the Devops Strategy, which allows the devops architect to link different stages via events to form a larger strategy. We will start with a sample usage scenario for a multi-stage devops strategy, and show how the stages are configured.  This is followed by more detailed design.
 
 ### Four Types of Repositories
 
@@ -407,195 +641,6 @@ Note that there other other ways to configure the dependencies between the appli
 - The Integration stage of the svc-a pipeline may be the one to emit the message
 - The processing of the Integration_A event for the application, if using repository for promotion, is to to create a PullRequest to update the FVT repository.
 
-### Sample One Stage Build
-
-![One Stage Build](OneStageBuild.jpg)
-
-
-1: Register Webhook
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: GithubEventSource
-metadata:
-  name: user-hello-world-github
-  namespace: kabanero
-spec:
-    url: https://github.com/user/hello-world
-    apiSecret: user-hello-world-github-api
-```
-
-2. Webhook listener receives web hook POST and emits Push event
-
-
-3. controller for StrategyTrigger receives Push Event. 
-
-It uses StrategyTrigger CRD to do event filtering and variable substitution ang generate StrategyRun CRD:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyTrigger
-metadata:
-  name: one_stage
-  namespace: kabanero
-spec:
-  - strategy: one_stage
-  - events:
-    - trigger:
-       attribute: name
-       value : Push
-       filter:
-          - attribute: branch
-            allowed: master
-            disallowed: *test
-       variableBindings: 
-          - name: source
-            location: ${event.resource}
-            branch: ${event.branch}
-            commit: ${event.commit}
-          - name: app
-            location: ${docker_registry}/{$event.repoisotry}
-        emit: 
-          attribute: name
-          value: Start_build
-```
-
-
-And the generated StrategyRun:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyRun
-metadata:
-  name: one_stage_201909030817000
-  namespace: kabanero
-spec:
-  strategy: one_stage
-  contextID: 201909030817000
-  variables: 
-    - name: source
-      location: https://www.github.com/user/hello-world
-      commit: 1234
-    - name: app
-      location: mydocker-registry.com/hello-world
-  emit: 
-    attribute: name
-    value: Start_build
-status:
-    statue: in-progress
-```
-
-5. The controller for Strategy creates StageRun for each stage, and emits Start_build event:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StageRun
-metadata:
-  name: appsody_build_201909030817000
-  namespace: kabanero
-spec:
-  stageName: appsody_build
-  stageKind: AppsodyBuildStage
-  contextID: 201909030817000
-  strategy_run: one_stage_201909030817000
-status:
-  state: in-progress
-```
-
-And this is the CRD for the One_stage strategy that is used to look up the stages:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyDefinition
-metadata:
-  name: one_stage
-  namespace: kabanero
-spec:
-  - strategy_variables:
-      - name: "source"
-        type: "Github"
-      - name: "app"
-        type: "image"
-  - stage_bindings:
-    - stageName: appsody_build
-      stageKind: AppsodyBuild
-      resourceBindings:
-        - inputBinding:
-            - stageVariable: source
-              strategyVariable: source
-        - outputBinding:
-            - stageVariable: image
-              strategyVariable: app
-      triggers:
-          - attribute: name
-            value: "Start_Build"
-      emit:
-        - event:
-          - attribute: name
-            value:  Build
-          - attributge: status
-            value: $stage_status
-```
-
-And this is the CRD for AppsodyBuild stage:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: AppsodyBuild
-metadata:
-  name: appsody_build
-  namespace: kabanero
-spec:
-  resources:
-    input:
-      - name: source
-        type: github
-    output:
-      - name: image
-        type: docker
-```
-
-6. The controller for AppsodyBuild uses StageRun and StrategyRun to listen for the events, and find the values of its variables to generate Tekton PipelineResource and PipelineRun to start the build.
-
-
-On next PUsh to github, Push(5678) is received:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyRun
-metadata:
-  name: one_stage_201909031252000
-  namespace: kabanero
-spec:
-  strategy: one_stage
-  contextID: 201909031252000
-  variables: 
-    - name: source
-      location: https://www.github.com/user/hello-world
-      commit: 5678
-    - name: app
-      location: mydocker-registry.com/hello-world
-  emit: 
-    attribute: name
-    value: Start_build
-status:
-    statue: in-progress
-```
-
-The controller for StrategyRun also creates a run for each stage.  For example:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StageRun
-metadata:
-  name: appsody_build_201909031252000
-  namespace: kabanero
-spec:
-  stageName: appsody_build
-  stageKind: AppsodyBuild
-  contextID: 201909031252000
-  strategy_run: one_stage_201909031252000
-status:
-  state: in-progress
-```
-
-The Appsody Stage controller creates TektonResource and PipelineRun to start the run.
 
 
 ### Sample Multi-stage Devops Strategy
@@ -1200,50 +1245,21 @@ Note: For security reasons, Kubernetes Secrets are not stored in the `resource` 
 **TBD: Kabanero Operator related events**
 
 
-<a name="Git_OPs"></a>
-## Functional Specification
+<a name="Staging"></a>
+## Staging
 
-The basic tenant of Gitops is that the source repository is the source of truth.  Anything can be reproduced as long as the original is available in the source repository. Giops principles can be applied to:
-- Reproduce old builds
-- configure a running environment builds
-- Promote changes to different stages of a devops pipeline
-- Ensure running environment has not deviated from original specification
+October 2019:
+- Organizational web hook only without any of the CRDs
 
-### Usage Scenarios
-
-#### What strategy to apply when source code changes:
-
-The source directory shall contain a configuration file that specifies exactly which strategy to use for each event. Additional configurations may be passed to the strategy. For example, the "stack" attribute identifies which stack to use. 
-
-```
-stack: "java_microprofile:0.2.2"
-strategy: 
-    Push: appsody_build_push:0.2.2
-         version: 0.2.2
-    PullRequest: appsody_build_pr:0.2.3
-```
-
-#### Updating a stack due to security fix
-
-The content of a collection is immutable after it has been published, so that it is always possible to re-run old strategies.  Except that an index file that may be used to activate/deactivate stacks and strategies. For example:
-```
-strategies:
-   - name: appsody_build_push
-     activate: *
-     inactive: 0.2.1
-   - name: appsody_build_pr
-     activate: *
-     inactive: 0.2.1 
-stacks:
-  - name : java_microprofile:0.2.2
-    active: *
-    inactive: <= 0.2.1
-```
-
-To update a stack, the devops architect
-- publishes a new stack, e.g., java_microprofile:0.2.3
-- For each related repository:
-   - create a new branch
-   - change stack for all related applications 
-   - Create PR
-- If pipeline succeed, merge PR, otherwise, wait for developer to fix, or create a new stack.
+Or prioritized list (unlikely in Oct 2019):
+- update kabanero operator to install new code
+- No events: web hook listener directly creates StrategyRun resources.
+- Initial controller implementation to support CRDs (go?):
+   - TektonStage
+   - StrategyDefinition
+   - StrategyRun
+   - StageRun
+- automatic configuration of web hook via EventSource CRD (go?)
+- Install event infrastructure 
+- web hook listener uses events
+- Refine controllers
