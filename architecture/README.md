@@ -237,7 +237,7 @@ For the `svc-a` application, the architect is responsible for creating the Kaban
 - How to ensure Eclipse che/Codeready Workspaces only pick up standardized stacks
 - Do we want to prevent developers from creating their own stack?
 
-The architect configures Github in the same way as for `ui` application. The main difference is the creation of `develop` integration branch. Developers may create their own feature or defect forks or branches.
+The architect configures Github in the same way as `ui` application. The main difference is the creation of `develop` integration branch. Developers may create their own feature or defect forks or branches.
 
 The architect configures Tekton pipelines. The main difference is that there are additional pipeline for builds from `develop` branch, and for system test. Another difference is that many of the existing stacks in Codeready Workspaces can be built using existing source-2-image builders. The s2i step may be incorporated as part of the pipeline. See example here: https://github.com/openshift/pipelines-tutorial
 
@@ -355,11 +355,13 @@ When a collection is installed,  strategy CRD instances are also installed. Thes
 - Definition of how to trigger the strategy.
 
 
-The definition of the `Build` stage uses the `TektonStage` custom resource. The `TekonStage` custom resource allows Kabanero to use a Tekton pipeline as for a stage. it defines:
+The definition of the `Build` stage uses the `TektonStage` custom resource. The `TekonStage` custom resource allows Kabanero to use a Tekton pipeline for a stage. it defines:
 - the underlying Tekton pipeline to use
-- input/output resources
 - triggering event
 - output event
+
+The input and output resources are the same as the pipeline. Pre-defined variable  `stage_status` contains the status of the stage.
+
 
 ```
 apiVersion: kabanero.io/v1alpha1
@@ -370,13 +372,6 @@ metadata:
 spec:
   pipeline: appsody_build
   pipeline-namespace: kabanero
-  resources:
-    input:
-      - name: source
-        type: github
-    output:
-      - name: image
-        type: docker
   trigger:
     - attribute: name
       value: Start_build
@@ -384,7 +379,7 @@ spec:
     - attribute: name
       value: Build
     - attribute: status
-      value: $build_status
+      value: $stage_status
 ```
 
 The StrategyDefinition CRD defines a strategy instance.  For our example, it includes:
@@ -418,7 +413,7 @@ spec:
 ```
 
 The StrategyTrigger CRD defines:
-- event filter: what event  triggers the strategy
+- event trigger: what event triggers the strategy
 - first event to emit: the first event to trigger the first stage to run
 - variable substitutions: Mapping incoming event to values of global variables.
 - **TBD:**: additional environment variables and whether variables need to be passed during event passing.
@@ -546,6 +541,200 @@ Kabanero hosts an event infrastructure to allow system components to communicate
 
 
 One key component enabled by events is the Devops Strategy, which allows the devops architect to link different stages via events to form a larger strategy. We will start with a sample usage scenario for a multi-stage devops strategy, and show how the stages are configured.  This is followed by more detailed design.
+
+### Definitions
+
+A Kabanero `installation` is a set of Kubernetes resources used to host the Kabanero runtime. **TBD: Whether to support multiple installs in the same cluster.** This includes:
+- Custom resource definitions
+- namespaces
+- deployed containres
+- security policies
+- other co-installed infrastructure, such as Tekton and Kafka.
+
+
+One Kabanero `installation` may support multiple `instances`. Each instance provides an isolated devops environment. An `instance` is consist of
+- A unique name
+- A collection repository
+- A web hook listener URL
+- a set of workspaces.
+
+A workspace defines the devops execution environment for one or more related applications. It contains
+- A set of namespaces
+- Security policies for the resources created in the namespaces
+- Other Kubernetes resoruces.
+
+
+### Message Format
+
+Kabanero uses JSON as the event message format, and JSON path when filtering events.
+
+
+### Webhook Setup
+
+**TBD: This part of the design been changed, and will depend on Tekton webhook listener**.
+
+To set up web hooks to github, create and apply a GithubEventSource. Here is an example for setting up an organizational web hook:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: GithubEventSource
+metadata:
+  name: myorg-github
+  namespace: kabanero
+spec:
+    url: https://github.com/enterprises/myorg
+    apiSecret: myorg-github-api
+```
+
+Here is an example to set up a per-repository web hook to Github as an event source. 
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: GithubEventSource
+metadata:
+  name: user-hello-world-github
+  namespace: kabanero
+spec:
+    url: https://github.com/user/hello-world
+    apiSecret: user-hello-world-github-api
+```
+
+The status of the event source shows whether the web hook was configured. For example:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: GithubEventSource
+metadata:
+  name: myorg-github
+  namespace: kabanero
+spec:
+    url: https://github.com/enterprises/myorg
+    apiSecret: myorg-github-api
+status:
+  configured: true
+  message: "web hook created for https://github.com/entgerprise/myorg with web hook URL: https://my-openshift-cluster/kabanero/webhook using secret  defaul-kabanero-webhook-secret"
+```
+
+### Kabanero web hook Listener
+
+the Kabanero web hook listener plugs into the Tekton web hook listener. When the Tekton listener receives POST events from a repository, the Kabanero listener emits SourceRepository events.
+
+For Github, the topic path is: /`instance`/repository/github/`url`/`user`/`repository`, where
+- `instance` is the name of the kabanero `instance`.
+- `url` is the URL of the repository, such as `github.com`.
+- `user` is the name of the user or organziation for the repository
+- `repository` is the name of the repository.
+
+An example for a topic path:  `/kabanero/repository/github/github.com/myorg/hello-world`.
+
+For a `Push` request, the event looks like:
+```
+{
+  "repositoryType": "github",
+  "eventName" : "Push",
+  "user" : "myorg",
+  "repository": "hello-world",
+  "location" : "https://github.com/myorg/hello-world",
+  "branch" : "master",
+  "commit" : "1234567",
+- "rawData": JSON of the request
+}
+```
+
+### Build and Pipeline Configuration
+
+The configurations for build and pipelines need to support:
+- Repeatable build. For example, the current latest is 2.0.0, but need to go back and create a new branch off 1.0.15.
+- Changing builder images for OS and prerequisites  fixes without involving developer.
+  - But developers also need to move up eventually as well
+
+There are a few different approaches:
+- all build and pipeline configuration is stored in Github with the source code. Any changes to source code, and build configuration requires a pull request and re-build.
+- The source repository stores a pointer, such as a version number, to a different repository that contains the build configuration. Changing build and pipeline configuration requires changing the configurations in a separate repository and also changing the pointer itself in the source repository.
+- No information about build or pipeline configuration is stored with the source code.  Everything is stored externally in order to avoid developer changing the pipeline or build configuration.  Changes in build configuration or prerequisites does not require changing the source repository.
+
+For the first approach:
+- To repeat a build for a commit, extract the source repository for the commit, and all configuration is available to repeat the build. 
+- To change prerequisites, a new branch is created to update the configuration, and PullRequest used for test build. If test build succeeds, the new configuration is merged into master.
+
+For the second approach:
+- To repeat a build for a commit, extract the source repository for the commit, and the separate configuration repository, and all configuration is available to repeat the build. 
+- To change prerequisites,
+  - The new configuration under a new version number is created in the separate repository.
+  - A new branch is created to update the version number in the source
+  - A PullRequest used for test build. If test build succeeds, the new configuration is merged into the branch.
+
+
+For the third approach:
+- A log file captures the configurations used for each build. To repeat a build, the logfile needs to be consulted, and either the tool needs to use the configuration the the log file, or the configuration needs to be modified manually to match the saved configuration.
+- To change the prerequisites,  the configuration used for the build is modified. New builds are requested without first creating PullRequest, or modifying the master branch of the source repository. 
+
+
+For the first approach, a configuration file, kabanero-strategy.yaml, defines how repository events trigger a run of the strategy. For example,
+- event: Push
+  allowedBranches: master
+  resourcesDirectory: strategies/pushMaster
+- event: Push
+  allowedBranches: *
+  disAllowedBranches: master
+  resourcesDirectory: strategies/pushNonMaster
+- event: PullRquest
+  allowedBranches: master
+  resourcesDirectory: strategies/pullRequestMaster
+
+The directory strategies/pushMaster contains all the resources required to run the strategy for a Push request to `master` branch. One example is the StrategyRun resource to run the strategy:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: svc-a-strategy-${contextID}
+  namespace: svc-a-strategy
+spec:
+  strategy: one_stage
+  variables: 
+    - stack: "kabanero/node-js:0.2.2"
+    - name:  image
+      location: ${default-registry}/hello-world:0.0.1
+  emit: 
+    - name: Start_build
+```
+
+For the second approach, the source repository contains a configuration file, such as kabanero-strategy.yaml, with a version number for the strategy:
+```
+strategy-version: 0.2.1
+```
+
+A separate repository, or maybe the collection repository itself, has a directory structure containing the available strategies. For example,
+the directory hello-world/0.2.1 contains the trigger file, and the underneath the directory, the resources for strategy. To update the strategy, make a copy from 0.2.1 to 0.2.2, make the update, then create a PullRequest to update the original source to 0.2.2.
+
+For the third approach, the trigger file and the strategies are stored with the collection. 
+- For repeatable build, 
+  - Create a new branch where repeating a build is required
+  - Perform a build using existing rules.  If the build does not work tweak the trigger to use a different strategy, and adjust the build configuration as needed.
+- For changing prerequisites, since there is no change to the source code repository, changes to the collection or trigger is required. Most common involves semantic versioning of the stack.  Pre-testing all applications and changes to the trigger and configuration is required.
+
+Here is a list of scenarios and how the three approaches compare for each scenario:
+- Ease of understanding the configuration for each build:
+  - first: easy, it's in source repository.
+  - second: moderate, link from the source to a different repository
+  - third: hard, check the build log
+- Ease of repeating a build:
+  - first: easy, as all configuration is in source repository
+  - second: moderate, due to link
+  - third: hard, need to check the build is using original configuration
+- Ease of updating stacks by solution architect:
+  - first: easy, just test stack itself,  then create PR for each app.
+  - second: easy, test stack, then create PR
+  - third: hard: test stack and every app first
+- Ease of updating stacks without notifying developer:
+  - first: easy, through PR process. 
+  - second: easy, through PR process
+  - third: easy, with semantic versioning
+- Ease of allowing each app to update at its own schedule:
+  - first: easy, through PR process
+  - second: easy, through PR process
+  - third: hard, Create new trigger rules for apps that don't work.
+      - But what does that rule look like? Have a special branch to test new stack, while existing branches are on the old stack? 
+
 
 ### Four Types of Repositories
 
@@ -1097,76 +1286,10 @@ If the StageRun resource is deleted, the controller cancels any ongoing action, 
 **TBD: A stage development library will be useful**
 
 
-### Webhook Setup
-
-To set up web hooks to github, create and apply a GithubEventSource. Here is an example for setting up an organizational web hook:
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: GithubEventSource
-metadata:
-  name: myorg-github
-  namespace: kabanero
-spec:
-    url: https://github.com/enterprises/myorg
-    apiSecret: myorg-github-api
-```
-
-Here is an example to set up a per-repository web hook to Github as an event source. 
-
-```
-apiVersion: kabanero.io/v1alpha1
-kind: GithubEventSource
-metadata:
-  name: user-hello-world-github
-  namespace: kabanero
-spec:
-    url: https://github.com/user/hello-world
-    apiSecret: user-hello-world-github-api
-```
-
-The status of the event source shows whether the web hook was configured. For example:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: GithubEventSource
-metadata:
-  name: myorg-github
-  namespace: kabanero
-spec:
-    url: https://github.com/enterprises/myorg
-    apiSecret: myorg-github-api
-status:
-  configured: true
-  message: "web hook created for https://github.com/entgerprise/myorg with web hook URL: https://my-openshift-cluster/kabanero/webhook using secret  defaul-kabanero-webhook-secret"
-```
-
-#### Kabanero web hook Listener
-
-When source is pushed to Github, or when a PullRequest is created, the Kabanero web hook listener receives a POST request from github, and emits a `SourceRepository` event to the `/kabanero/SourceRepository` topic,  where `kabanero` is the kabanero instance name.  For example, the event for a push  may be:
-
-```
-- repositoryType: Github
-- eventName: Push
-- location: https://github.com/myorg/hello-world
-- branch: master
-- sha: 1234567
-- rawData: JSON of the request
-```
-**TBD: How much filtering for the raw data.**
-
-An event for a PullRequest may be:
-
-```
-- repositoryType: Github
-- eventName: PullRequest
-- location: https://github.com/myorg/hello-world
-- action: action associated with pull request
-- branch: master
-- rawData: JSON of the request
-```
-
 
 ### Event Topics
+
+The content of Kabanero events are JSON objects, and will be filtered via JSON PATH.
 
 #### Topic: SourceRepository
 
