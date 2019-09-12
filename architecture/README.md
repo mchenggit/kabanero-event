@@ -328,8 +328,9 @@ The diagram below is meant to illustrate a variety of scenarios that are enabled
 ![Motivating Scenarios ](MotivationScenarios.jpg)
 
 First, definitions:
-- A strategy defines a single high level pipeline, and is triggered by events external to the strategy itself. For example, the strategy `Svc-A` is triggered by `Push` events generated as a result of a `Push` to a source repository.
-- A strategy is consist of one or more `stages`, each triggered by an event internal to the strategy.
+- A `strategy` defines a single high level pipeline, consisting of one or more `stages.
+- A `strategy` is triggered by an event to its starting `stage`. For example, the `stage` Build is triggered by the `Start_build` event.
+- Each of the internal `stages` is triggered by an event internal to the strategy.
 - Each `stage` of strategy is implemented by some other tool,  such as a Travis build (not yet supported by Kanabero), or a Tekton pipeline.  
 - Though not shown in the diagram, each stage may contain input and output parameters.
 
@@ -352,7 +353,6 @@ This section contains a walkthrough for how to configure a one stage strategy.
 When a collection is installed,  strategy CRD instances are also installed. These instances are applied and available in Kubernetes. For our example, they include:
 - Definition of the `Build` stage
 - Definition of of the `one_stage` strategy
-- Definition of how to trigger the strategy.
 
 
 The definition of the `Build` stage uses the `TektonStage` custom resource. The `TekonStage` custom resource allows Kabanero to use a Tekton pipeline for a stage. it defines:
@@ -410,45 +410,41 @@ spec:
         - outputBinding:
             - stageVariable: image
               strategyVariable: app
+  - firstStage: appsody_build
 ```
 
-The StrategyTrigger CRD defines:
-- event trigger: what event triggers the strategy
-- first event to emit: the first event to trigger the first stage to run
-- variable substitutions: Mapping incoming event to values of global variables.
-- **TBD:**: additional environment variables and whether variables need to be passed during event passing.
 
-StrategyTrigger for our example defines:
-- which strategy to use: `one_stage`
-- filtering to allow only Push on the master branch
-- first event to emit: `Start_build`.
-- mapping from event to values of the two resources for the input repository, and output image.
+There are two different proposals to define how the strategy is triggered:
+- The first is to store the trigger and the StrategyRun in the source repository.  
+- The second is to store the same information outside of the source repository.
 
+For the first approach, a file in the source repository define the trigger, and the directory that contains the resources to start the run. For example, the file kabanero-strategy.yaml may contain:
+```
+- event: Push
+  allowedBranches: master
+  resourceDirectory: strategies/pushMaster
+- event: Push
+  allowedBranches: *
+  disAllowedBranches: master
+  resourcesDirectory: strategies/pushNonMaster
+- event: PullRquest
+  allowedBranches: master
+  resourcesDirectory: strategies/pullRequestMaster
+```
+
+Each of the `resoucreDirectory` contains the resources to be applied to implement the strategy, with appropriate variable substitution. For example, the directory strategies/pushMaster may contain:
 ```
 apiVersion: kabanero.io/v1alpha1
-kind: StrategyTrigger
+kind: StrategyRun
 metadata:
-  name: svc-a-strategy
-  namespace: kabanero
+  name: svc-a-strategy-${contextID}
+  namespace: svc-a-strategy
 spec:
-  - strategy: one_stage
-  - events:
-    - trigger:
-       attribute: name
-       value : Push
-       filter:
-          - attribute: branch
-            allowed: master
-       variableBindings: 
-          - name: source
-            location: ${event.resource}
-            branch: ${event.branch}
-            commit: ${event.commit}
-          - name: app
-            location: ${docker_registry}/{$event.repoisotry}
-        emit: 
-          attribute: name
-          value: Start_build
+  strategy: one_stage
+  variables: 
+    - stack: "kabanero/node-js:0.2.2"
+    - name:  image
+      location: ${default-registry}/svc-a:0.0.1
 ```
 
 #### Register Web hook
@@ -712,28 +708,10 @@ For the third approach, the trigger file and the strategies are stored with the 
   - Perform a build using existing rules.  If the build does not work tweak the trigger to use a different strategy, and adjust the build configuration as needed.
 - For changing prerequisites, since there is no change to the source code repository, changes to the collection or trigger is required. Most common involves semantic versioning of the stack.  Pre-testing all applications and changes to the trigger and configuration is required.
 
-Here is a list of scenarios and how the three approaches compare for each scenario:
-- Ease of understanding the configuration for each build:
-  - first: easy, it's in source repository.
-  - second: moderate, link from the source to a different repository
-  - third: hard, check the build log
-- Ease of repeating a build:
-  - first: easy, as all configuration is in source repository
-  - second: moderate, due to link
-  - third: hard, need to check the build is using original configuration
-- Ease of updating stacks by solution architect:
-  - first: easy, just test stack itself,  then create PR for each app.
-  - second: easy, test stack, then create PR
-  - third: hard: test stack and every app first
-- Ease of updating stacks without notifying developer:
-  - first: easy, through PR process. 
-  - second: easy, through PR process
-  - third: easy, with semantic versioning
-- Ease of allowing each app to update at its own schedule:
-  - first: easy, through PR process
-  - second: easy, through PR process
-  - third: hard, Create new trigger rules for apps that don't work.
-      - But what does that rule look like? Have a special branch to test new stack, while existing branches are on the old stack? 
+
+
+The following table compares the three approaches:
+![Build Configuration Comparison](BuildConfigComparisonTable.jpg)
 
 
 ### Four Types of Repositories
