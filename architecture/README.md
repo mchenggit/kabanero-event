@@ -447,12 +447,14 @@ spec:
       location: ${default-registry}/svc-a:0.0.1
 ```
 
+The second approach stores essentially the same information outside of the source repository.
+
 #### Register Web hook
 
-Create and apply GithubEventSource.yaml to register a web hook. This example uses a repository web hook.
+Create and apply GithubEventSource.yaml to register a web hook. This example uses a repository web hook. **TBD: This is to be implemented in Tekton.**
 
 ```
-apiVersion: kabanero.io/v1alpha1
+apiVersion: tekton.dev/v1alpha1
 kind: GithubEventSource
 metadata:
   name: user-hello-world-github
@@ -464,34 +466,13 @@ spec:
 
 #### Web hook Processing
 
-Kabanero Web hook listener receives web hook POST and emits Push event to the SoruceRepository topic.
+Tekton Web hook listener receives web hook POST operation.  Kabanero plugin intercepts the event and emits Push event to the /kabanero/<instance>/repository/org/repository topic.
 
 
 ####  Push event Processing
 
-Kabanero strategy trigger Listener matches the event to `svc-a-trigger`. The listener generates the corresponding StrategyRun Resource to start the strategy.  Each trigger event creates a new instance of StrategyRun. Note that StrategyRun instance also contains values of resolved variables.
+Kabanero listener receives the Push event, uses the pre-defined trigger to locate the StategryRun resource.  The resource is applied after variable substitution.
 
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyRun
-metadata:
-  name: svc-a-strategy-201909030817000
-  namespace: kabanero
-spec:
-  strategy: one_stage
-  contextID: 201909030817000
-  variables: 
-    - name: source
-      location: https://www.github.com/user/hello-world
-      commit: 1234
-    - name: app
-      location: mydocker-registry.com/hello-world
-  emit: 
-    attribute: name
-    value: Start_build
-status:
-    statue: in-progress
-```
 
 ### Running the Strategy
 
@@ -520,11 +501,11 @@ After all the StageRun resources are created, the controller emits the `Start_bu
 The controller for each stage is responsible for:
 - Creating listeners to listen for trigger events
 - When triggered, creating any additional resources, and run the stage.
-- When completed, emit any configure events.
+- When completed, emit any configured events.
 
 For our example, the controller for TektonStage  
 - Creates a listener to listen for `Start_build` event.
-- When `Start-build` event is received, creates Tekton relates resources to start the pipeline:
+- When `Start-build` event is received, creates Tekton related resources to start the pipeline:
    - `PipelineResource`
    - `PipelineRun`
 - When the Tekton pipeline completes, emits `Build` event.
@@ -639,31 +620,80 @@ For a `Push` request, the event looks like:
 ### Build and Pipeline Configuration
 
 The configurations for build and pipelines need to support:
-- Repeatable build. For example, the current latest is 2.0.0, but need to go back and create a new branch off 1.0.15.
-- Changing builder images for OS and prerequisites  fixes without involving developer.
+- Repeatable build. For example, the current latest is 2.0.2, but 
+  - Need to revert back to a previous commit at 2.0.1 or
+  - Need to go back and create a new branch off 1.0.15.
+- Moving to a compatible stack with new builder images for OS and prerequisites fixes, without involving developer.
   - But developers also need to move up eventually as well
+- Moving to an incompatible stack. 
+- option to use Semantic versioning to pick up the latest stack version to be used for build
 
 There are a few different approaches:
-- all build and pipeline configuration is stored in Github with the source code. Any changes to source code, and build configuration requires a pull request and re-build.
-- The source repository stores a pointer, such as a version number, to a different repository that contains the build configuration. Changing build and pipeline configuration requires changing the configurations in a separate repository and also changing the pointer itself in the source repository.
-- No information about build or pipeline configuration is stored with the source code.  Everything is stored externally in order to avoid developer changing the pipeline or build configuration.  Changes in build configuration or prerequisites does not require changing the source repository.
+- Build and pipeline **configuration** is stored in Github with the source code. Any changes to source code, and build configuration requires a pull request and re-build. Note that **configuration** refers to the selection of `strategies`, environment variables, and variable substitutions. It does not refer to the strategy or pipeline definitions themselves.
+- The source repository stores a pointer, such as a version number, to a different repository that contains the build configuration. Changing build and pipeline configuration requires changing the configurations in the separate repository and changing the pointer itself in the source repository.
+- No information about build or pipeline configuration is stored with the source code.  Everything is stored externally in order to avoid developer changing the pipeline or build configuration.  Changes in build configuration or prerequisites does not require changing the source repository. A separate mechanism is used to track which strategy and configuration to use for a specific commit.
 
-For the first approach:
+#### Build and Pipeline Configuration With Semantic Version
+
+For the first approach with semantic versioning:
+- To repeat a build for a commit, extract the source repository for the commit, and all configuration should be available to repeat the build, except the stack, which is semantically version, may be at a high version.  If build fails due to new semantic versioning, fix the build.
+- To change prerequisites to a compatible prerequisites:
+   - update stack to new version
+   - Repeat the build  to pick up latest stack.
+- To change prerequisites to an  incompatible prerequisite:
+   - update stack to new version
+   - update source repository to point to new version
+   - Rerun test and fix PR if needed.
+
+
+For the second approach with semantic version:
+- To repeat a build for a commit, extract the source repository for the commit, and the separate configuration repository. If build fails due to semantic version, fix the PR. 
+- To update to semantically compatible prerequisites :
+  - Stack is updated.
+  - build is repeated, and if it fails, create and fix PR.
+- To update to semantically incompatible prerequisites :
+  - Stack is created.
+  - source configuration updated.
+  - new Test build initiated.
+
+The third approach requires external repository checkpoint to associate specific commits to its build configuration. This may be created manually, or automatically when a build is kicked off.
+- To repeat a build for a previous commit:
+   - locate the checkpoint and restart build using configuration of that checkpoint.
+- To move to semantically compatible prerequisite:
+  - Add stack  with new version
+  - Repeat the build for a commit.
+- To change to semantically incompatible prerequisite:
+  - Add stack with new version 
+  - Update the checkpoint to use stack
+  - Repeat build for a commit
+
+#### Build and Pipeline Configuration Without Semantic Version
+
+For the first approach without semantic version:
 - To repeat a build for a commit, extract the source repository for the commit, and all configuration is available to repeat the build. 
-- To change prerequisites, a new branch is created to update the configuration, and PullRequest used for test build. If test build succeeds, the new configuration is merged into master.
+- To move to compatible stack, update the configuration and create a PR to test.
+- to move to incompatible prerequisites, update the configuration and create PR to test.
 
-For the second approach:
+For the second approach without semantic version:
 - To repeat a build for a commit, extract the source repository for the commit, and the separate configuration repository, and all configuration is available to repeat the build. 
-- To change prerequisites,
-  - The new configuration under a new version number is created in the separate repository.
-  - A new branch is created to update the version number in the source
-  - A PullRequest used for test build. If test build succeeds, the new configuration is merged into the branch.
+- To move to semantically compatible stack:
+  - New stack is added.
+  - A new branch is created to update the stack version in the source repository.
+  - A PullRequest used for test build. If it fails, an issue is created. Otherwise, it it merged.
+- To move to semantically incompatible prerequisites : same as for compatible stack.
 
 
-For the third approach:
-- A log file captures the configurations used for each build. To repeat a build, the logfile needs to be consulted, and either the tool needs to use the configuration the the log file, or the configuration needs to be modified manually to match the saved configuration.
-- To change the prerequisites,  the configuration used for the build is modified. New builds are requested without first creating PullRequest, or modifying the master branch of the source repository. 
+For The third approach:
+- To repeat a build for a previous commit:
+   - locate the checkpoint and restart build using configuration of that checkpoint.
+- To move to a different but semantically compatible stack:
+  - Add stack  with new version
+  - Change checkpoint configuration point to new stack
+  - Repeat the build for a previous commit.
+- To move to semantically incompatible prerequisite: same as moving to semantically compatible stack.
 
+
+#### Deatiled Configurations
 
 For the first approach, a configuration file, kabanero-strategy.yaml, defines how repository events trigger a run of the strategy. For example,
 - event: Push
@@ -702,12 +732,12 @@ strategy-version: 0.2.1
 A separate repository, or maybe the collection repository itself, has a directory structure containing the available strategies. For example,
 the directory hello-world/0.2.1 contains the trigger file, and the underneath the directory, the resources for strategy. To update the strategy, make a copy from 0.2.1 to 0.2.2, make the update, then create a PullRequest to update the original source to 0.2.2.
 
-For the third approach, the trigger file and the strategies are stored with the collection. 
+For the third approach, the trigger file and the build configurations are stored with the collection, together with information about which configuration to use for a commit.
 - For repeatable build, 
   - Create a new branch where repeating a build is required
   - Perform a build using existing rules.  If the build does not work tweak the trigger to use a different strategy, and adjust the build configuration as needed.
-- For changing prerequisites, since there is no change to the source code repository, changes to the collection or trigger is required. Most common involves semantic versioning of the stack.  Pre-testing all applications and changes to the trigger and configuration is required.
-
+- For moving to a compatible stack, there is no change to the source code repository. However, a new compatible stack is added, and semantic versioning may be used to pick up the latest compatible stack on rebuild.  Pre-testing all applications and changes to the trigger and configuration is required.
+- For moving to an incompatible stack, the incompatible stack is added, and the checkpoint is updated to use the new stack. Source repository also requires code changes. A PR is used to test the changes.
 
 
 The following table compares the three approaches:
