@@ -740,8 +740,10 @@ For the third approach, the trigger file and the build configurations are stored
 - For moving to an incompatible stack, the incompatible stack is added, and the checkpoint is updated to use the new stack. Source repository also requires code changes. A PR is used to test the changes.
 
 
-The following table compares the three approaches:
+The following tables compare the three approaches:
 ![Build Configuration Comparison](BuildConfigComparisonTable.jpg)
+![Build Configuration Comparison 2](BuildConfigComparisonTable2.jpg)
+![Build Configuration Comparison 3](BuildConfigComparisonTable3.jpg)
 
 
 ### Four Types of Repositories
