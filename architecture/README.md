@@ -344,15 +344,16 @@ The scenarios depicted in the above diagram include:
 
 ### Sample One Stage Build
 
-![One Stage Strategy](OneStageBuild.jpg)
+![Two Stage Strategy](TwoStageBuild.jpg)
 
-This section contains a walkthrough for how to configure a one stage strategy.
+This section contains a walkthrough for how to configure a Two stage strategy.
 
 #### Prerequisites
 
 When a collection is installed,  strategy CRD instances are also installed. These instances are applied and available in Kubernetes. For our example, they include:
 - Definition of the `Build` stage
-- Definition of of the `one_stage` strategy
+- Definition of the `Deploy` stage
+- Definition of of the `two_stage` strategy
 
 
 The definition of the `Build` stage uses the `TektonStage` custom resource. The `TekonStage` custom resource allows Kabanero to use a Tekton pipeline for a stage. it defines:
@@ -373,18 +374,36 @@ spec:
   pipeline: appsody_build
   pipeline-namespace: kabanero
   trigger:
-    - attribute: name
-      value: Start_build
+    - Start_build: 
   emits:
-    - attribute: name
-      value: Build
-    - attribute: status
-      value: $stage_status
+    name: Build
+    status: ${kabanero.stage.status}
+```
+
+The `Deploy` stage is a hypothetical custom stage provided by the user. A custom stage has its own CRD, but must provide input/output resources, event trigger definitions, and events it emits.
+
+```
+apiVersion: mygroup/v1alpha1
+kind: MyDeployStage
+metadata:
+  name: my-deploy
+  namespace: kabanero
+spec:
+  resources:
+    input:
+      - name: image
+        type: docker
+  trigger:
+    - name: Build
+      status: Success
+  emits:
+    - name: Build
+      status: ${kabanero.stage.status}
 ```
 
 The StrategyDefinition CRD defines a strategy instance.  For our example, it includes:
 - strategy wide variables and their types: `source`, and `app`.
-- stages to incorporate. In our example, it is just `appsody_build` stage.
+- stages to incorporate. In our example, it is the build and deploy stages.
 - mapping of strategy wide resources to stage resources.
 
 ```
@@ -394,60 +413,71 @@ metadata:
   name: one_stage
   namespace: kabanero
 spec:
-  - strategy_variables:
+  - strategy-variables:
+      - name: "stack"
+        type: "string"
       - name: "source"
         type: "Github"
       - name: "app"
         type: "image"
-  - stage_bindings:
+  - stage-bindings:
     - stageName: appsody_build
       stageKind: TektonStage
       stage-local-name: Build
       resourceBindings:
         - inputBinding:
+            - stageVariable: stack
+              strategyVariable: stack
             - stageVariable: source
               strategyVariable: source
         - outputBinding:
             - stageVariable: image
               strategyVariable: app
-  - firstStage: appsody_build
+    - stageName: my-deploy
+      stageKind: MyDeployStage
+      stage-local-name: Deploy
+      resourceBindings:
+        - inputBinding:
+            - stageVariable: image
+              strategyVariable: app
 ```
 
 
-There are two different proposals to define how the strategy is triggered:
-- The first is to store the trigger and the StrategyRun in the source repository.  
-- The second is to store the same information outside of the source repository.
+There multiple proposals to define how the strategy is triggered from repository events. (See discussions later). For this example, we will define a trigger file and store it in the source repository. 
 
-For the first approach, a file in the source repository define the trigger, and the directory that contains the resources to start the run. For example, the file kabanero-strategy.yaml may contain:
 ```
 - event: Push
   allowedBranches: master
-  resourceDirectory: strategies/pushMaster
+  resourceDirectory: strategies/pushMaster/0.1
 - event: Push
   allowedBranches: *
   disAllowedBranches: master
-  resourcesDirectory: strategies/pushNonMaster
+  resourcesDirectory: strategies/pushNonMaster/0.2
 - event: PullRquest
   allowedBranches: master
-  resourcesDirectory: strategies/pullRequestMaster
+  resourcesDirectory: strategies/pullRequestMaster/0.1
 ```
 
-Each of the `resoucreDirectory` contains the resources to be applied to implement the strategy, with appropriate variable substitution. For example, the directory strategies/pushMaster may contain:
+Each of the `resoucreDirectory` contains the resources to be applied to implement the strategy, with appropriate variable substitution. For example, the directory strategies/pushMaster/0.1 may contain a StrategyRun resource used to initiate a run of a strategy:
 ```
 apiVersion: kabanero.io/v1alpha1
 kind: StrategyRun
 metadata:
-  name: svc-a-strategy-${contextID}
-  namespace: svc-a-strategy
+  name: my-app-strategy-${kabanero.context.ID}
+  namespace: mayapp-strategy
 spec:
-  strategy: one_stage
+  strategy: two_stage
   variables: 
-    - stack: "kabanero/node-js:0.2.2"
+    - stack: "kabanero/node-js:0.2"
+    - name: source
+      url: ${kabanero.repository.url}
+      revision: ${kabanero.repository.branch}
     - name:  image
-      location: ${default-registry}/svc-a:0.0.1
+      location: ${kabanero.default.registry}/my-app
+  emit:
+     name: Start_Build
 ```
 
-The second approach stores essentially the same information outside of the source repository.
 
 #### Register Web hook
 
@@ -466,17 +496,36 @@ spec:
 
 #### Web hook Processing
 
-Tekton Web hook listener receives web hook POST operation.  Kabanero plugin intercepts the event and emits Push event to the /kabanero/<instance>/repository/org/repository topic.
+Tekton Web hook listener receives web hook POST operation.  Kabanero plugin intercepts the event and emits Push event to the /kabanero/<instance>/repository/github/<org>/<repository> topic.
 
 
 ####  Push event Processing
 
-Kabanero listener receives the Push event, uses the pre-defined trigger to locate the StategryRun resource.  The resource is applied after variable substitution.
+Kabanero listener receives the Push event, locates the trigger file, then fetches the StrategyRun resource.  The resource is applied after variable substitution. The actual StrategyRun resource applied may look like:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: my-app-strategy-201909030817000
+  namespace: mayapp-strategy
+spec:
+  strategy: two_stage
+  variables: 
+    - stack: "kabanero/node-js:0.2"
+    - name: source
+      url: https://github.com/user/hello-world
+      revision: master
+    - name:  image
+      location: docker-registry.default.svc:5000/my-app
+  emit:
+     name: Start_Build
+```
 
 
 ### Running the Strategy
 
-The controller for StrategyRun finds the corresponding StrategyDefinition `one_stage`, and creates the corresponding StageRun for each stage. For our example, it is just one stage:
+The controller for StrategyRun finds the corresponding StrategyDefinition `two_stage`, and creates the corresponding StageRuns. For our example, there are two stages:
 
 ```
 apiVersion: kabanero.io/v1alpha1
@@ -486,12 +535,38 @@ metadata:
   namespace: kabanero
 spec:
   stageName: appsody_build
-  stageKind: AppsodyBuildStage
+  stageKind: TektonStage
+  stage-local-name: Build
   contextID: 201909030817000
-  strategy_run: one_stage_201909030817000
+  strategy_run: two_stage_201909030817000
 status:
   state: in-progress
 ```
+
+The Controller for TektonStage processes the creation of the StageRun object as follows:
+- Ensure that the stageKind is `TektonStage`, otherwise the resource is ignored.
+- Locate the `TektonStage` whose name is `appsody_build` and register to receive trigger events `Start_Build`.
+
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StageRun
+metadata:
+  name: my-deploy-201909030817000
+  namespace: kabanero
+spec:
+  stageName: my-deploy
+  stageKind: MyDeployStage
+  contextID: 201909030817000
+  strategy_run: two_stage_201909030817000
+status:
+  state: in-progress
+```
+
+The Controller for MyDeployStage processes the creation of the StageRun object as follows:
+- Ensure that the stageKind is `MyDeployStage`, otherwise the resource is ignored.
+- Locate the `MyDeployStage` whose name is `my-deploy` and register to receive trigger events `Build(success)`.
+
 
 After all the StageRun resources are created, the controller emits the `Start_build` event to trigger the first stage.
 
@@ -499,16 +574,24 @@ After all the StageRun resources are created, the controller emits the `Start_bu
 ### Running the Stages
 
 The controller for each stage is responsible for:
-- Creating listeners to listen for trigger events
+- Creating listeners to listen for trigger events after `StageRun` resource is created.
 - When triggered, creating any additional resources, and run the stage.
 - When completed, emit any configured events.
 
 For our example, the controller for TektonStage  
-- Creates a listener to listen for `Start_build` event.
+- Creates a listener to listen for `Start_build` event after the StageRun resource is created.
 - When `Start-build` event is received, creates Tekton related resources to start the pipeline:
    - `PipelineResource`
    - `PipelineRun`
 - When the Tekton pipeline completes, emits `Build` event.
+
+The controller for MyDeployStage
+- Creates a listener to listen for `Build(success)` event after the StageRun resource is created.
+- when `Build(sucess)` event is received, performs whatever custom action is needed.
+- Upon completion, emit the `Deploy` event.
+
+
+The controller for the StrategyRun monitors the status for each stage, and updates the overall status within the StrategyRun resource.
 
 
 <a name="Functional_Specification"></a>
