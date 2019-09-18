@@ -397,7 +397,7 @@ spec:
     - name: Build
       status: Success
   emits:
-    - name: Build
+    - name: Deploy
       status: ${kabanero.stage.status}
 ```
 
@@ -410,7 +410,7 @@ The StrategyDefinition CRD defines a strategy instance.  For our example, it inc
 apiVersion: kabanero.io/v1alpha1
 kind: StrategyDefinition
 metadata:
-  name: one_stage
+  name: two-stage
   namespace: kabanero
 spec:
   - strategy-variables:
