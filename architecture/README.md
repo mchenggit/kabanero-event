@@ -342,7 +342,7 @@ The scenarios depicted in the above diagram include:
   - When a new version of the service `Svc-A` is deployed to the integration environment, the event `Integration_A` is sent. This allows all interested parties to react to the event.  In our example, it triggers the strategy `myap-retest` to run to re-test `Svc-A`. The result of rerunning the test may trigger additional events to be emitted.
 - Usage of different tools for each stage.
 
-### Sample One Stage Build
+### Sample Two Stage Build
 
 ![Two Stage Strategy](TwoStageBuild.jpg)
 
@@ -361,7 +361,7 @@ The definition of the `Build` stage uses the `TektonStage` custom resource. The 
 - triggering event
 - output event
 
-The input and output resources are the same as the pipeline. Pre-defined variable  `stage_status` contains the status of the stage.
+The input and output resources are the same as the pipeline. Pre-defined variable  `kabaoer.stage.status` contains the status of the stage.
 
 
 ```
@@ -443,32 +443,36 @@ spec:
 ```
 
 
-There multiple proposals to define how the strategy is triggered from repository events. (See discussions later). For this example, we will define a trigger file and store it in the source repository. 
+
+Triggers and variable substitutions and resources are used to define when and which strategy to apply. For our example, the trigger looks like:
 
 ```
 - event: Push
   allowedBranches: master
-  resourceDirectory: strategies/pushMaster/0.1
+  resourceDirectory: strategies/pushMaster
 - event: Push
   allowedBranches: *
   disAllowedBranches: master
-  resourcesDirectory: strategies/pushNonMaster/0.2
-- event: PullRquest
+  resourceDirectory: strategies/pushNonMaster
+- event: PullRequest
   allowedBranches: master
-  resourcesDirectory: strategies/pullRequestMaster/0.1
+  resourcesDirectory: strategies/pullRequestMaster
+- variables:
+  - hello-world.stack: "kabanero/node-js:0.2"
 ```
 
-Each of the `resoucreDirectory` contains the resources to be applied to implement the strategy, with appropriate variable substitution. For example, the directory strategies/pushMaster/0.1 may contain a StrategyRun resource used to initiate a run of a strategy:
+
+Each of the `resoucreDirectory` contains the resources to be applied to implement the strategy, with appropriate variable substitution. For example, the directory strategies/pushMaster may contain a StrategyRun resource used to initiate a run of a strategy:
 ```
 apiVersion: kabanero.io/v1alpha1
 kind: StrategyRun
 metadata:
-  name: my-app-strategy-${kabanero.context.ID}
+  name: myapp-two-stage-${kabanero.context.ID}
   namespace: mayapp-strategy
 spec:
-  strategy: two_stage
+  strategy: two-stage
   variables: 
-    - stack: "kabanero/node-js:0.2"
+    - stack: "${hello-world.stack}"
     - name: source
       url: ${kabanero.repository.url}
       revision: ${kabanero.repository.branch}
@@ -478,6 +482,7 @@ spec:
      name: Start_Build
 ```
 
+See discussions later about whether triggers,  variable substitutions, and resoruces should be stored in the source repository or with the collections.
 
 #### Register Web hook
 
@@ -496,7 +501,7 @@ spec:
 
 #### Web hook Processing
 
-Tekton Web hook listener receives web hook POST operation.  Kabanero plugin intercepts the event and emits Push event to the /kabanero/<instance>/repository/github/<org>/<repository> topic.
+Tekton Web hook listener receives web hook POST operation.  Kabanero plugin intercepts the event and emits Push event to the `/kabanero/instance/repository/github/org/repository` topic.
 
 
 ####  Push event Processing
@@ -593,6 +598,116 @@ The controller for MyDeployStage
 
 The controller for the StrategyRun monitors the status for each stage, and updates the overall status within the StrategyRun resource.
 
+### Other Usage Scenarios
+
+To start a strategy manually, create a StrategyRun resource and apply it. For example:
+
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyRun
+metadata:
+  name: my-app-strategy-test-run
+  namespace: mayapp-strategy
+spec:
+  strategy: two_stage
+  variables: 
+    - stack: "kabanero/node-js:0.2"
+    - name: source
+      url: https://github.com/user/hello-world
+      revision: master
+    - name:  image
+      location: docker-registry.default.svc:5000/my-app
+  emit:
+     name: Start_Build
+```
+
+To start a strategy on a timer, create a `cron` based StrategyTrigger. This trigger may be stored with the collection and started automatically. For example, to do hourly build from master branch of myapp:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyTrigger
+metadata:
+  name: hourly-build-myapp
+  namespace: kabanero
+spec:
+  cron: "00 * * * *"
+  resourcesDirectory: myapp/strategies/buildMaster
+```
+
+
+To start a strategy based on an event, use an event based StrategyTrigger. For example, to re-run FVT of myapp based on Integration_A event:
+```
+apiVersion: kabanero.io/v1alpha1
+kind: StrategyTrigger
+metadata:
+  name: myapp-svc-a-trigger
+  namespace: kabanero
+spec:
+  - trigger:
+    - name: Integration_a
+  - resourcdeDirectory: myapp/strategies/rerun-fvt
+  - variables
+    name1: ${kabanero.event.attribute1}
+    name2: ${kabanero.event.attribute2}
+```
+
+
+### Discussion on Where to Store Strategy Parameters for a Repository
+
+The strategy parameters are the definitions of triggers, variable substitutions, and resources required initiate a strategy based on operations to the source repository. Where these parameters are stored have implications on how to support these scenarios:
+- Reverting to an older commit. For example, reverting from 2.0.10 to 2.0.8
+- Creating a branch based on an old commit. For example, creating a branch based on 2.0.5.
+
+The first option is to store the parameters within the source repository. This is the easiest way to support the above scenarios. Reversion or creating from an old commit simply returns the repository to the older version of the parameters.
+
+The second option is to store a pointer within the source repository, with the parameters stored within the collection. The main differences with this approach are:
+- less information is stored in the source repository.
+- Updates to the parameters requires updating two places:
+  - First, update the collection and create a new pointer
+  - Second, update the source repository with the new pointer.
+- Old pointers have to remain valid after reversion.
+
+The third option is to store the parameters outside of the source repository with additional bookkeeping to identify which parameters are suitable for which branches/commits of the source repository. This option bypasses using the source repository to maintain history, is the most difficult to implement, but has the advantage of isolating the management of the parameters outside of the source repository.
+
+The recommendation is to store the parameters with the source repository until there is a strong requirement for isolation. Existing CI/CD tools such as Travis, Jenkins, Gitlab, Azure Pipelines store configuration within the source repository. 
+
+### Discussion on Forked Repository
+
+When a repository is forked, strategy parameters are forked as well. These parameters are not applicable to the forked repository. If code changes in the forked repository only run through unit tests in the developer environment, then is not an issue.  After unit testing, a pull request back to the original repository may be used, and it works the same way as a pull request from a branch in the source repository.
+
+If the requirement is to run separate strategies for the forked repository, then it can be done as follows:
+- A new web hook listener is created for the forked repository. 
+- New strategy parameters are created for the forked repository, stored in a non-default location to not conflict with the original.
+- PullRequests may:
+   - cherry-pick only those commits related to source code changes, or
+   - include strategy parameters  changes at non-default location if the owner of original repository allows it. This reduces the overhead of having to cherry-pick commits commits.
+
+
+### Discussion on Semantic Versioning 
+
+The requirements are:
+- Enable developers to use semantic versioning to automatically pick up new stacks
+- Stacks may be updated without informing the developer.
+- Allow broken projects time to get fixed.
+
+The first option to support above scenarios is to allow developers to use semantic versioning in the development environment, but to use exact version in the strategy parameters. The process to update to a compatible stack is as follows:
+- For each project, create an "update" branch, and change the stack version number, e.g., from 0.2.2 to 0.2.3.
+- Create a Pull Request, and let the update strategy run. 
+- If the strategy succeeds, merge takes place, and the project is now at the updated version.
+- If the strategy fails, an issue is created, and additional code added to the PR until it succeeds.
+- Upon completion of all projects, the stack 0.2 is updated to be the same as 0.2.3 so that developer automatically picks up the latest.
+
+Note that when reverting back to an old commit, it also reverts back to the old version.  To move up to the latest, a new PR is needed.
+
+
+The second option is to use semantic versioning for the strategy parameters as well. The process is as follows:
+- For each project, create an "update" branch, and change the stack version number to an exact version, e.g., from 0.2 to 0.2.3.
+- A "update" strategy is run against the "update" branch.
+- For each application where the strategy fails :
+   - Fix the code first in the "update" branch for "0.2.3"
+   - use PR to merge source code changes back to the main branch.
+- Upon completion of all projects, the stack 0.2 is updated to be the same as 0.2.3 so that developer and strategies automatically picks up the latest.
+
+Note that when reverting back to an old commit, semantic version still takes place for the strategy.
 
 <a name="Functional_Specification"></a>
 ## Events Functional Specification
@@ -700,133 +815,6 @@ For a `Push` request, the event looks like:
 }
 ```
 
-### Build and Pipeline Configuration
-
-The configurations for build and pipelines need to support:
-- Repeatable build. For example, the current latest is 2.0.2, but 
-  - Need to revert back to a previous commit at 2.0.1 or
-  - Need to go back and create a new branch off 1.0.15.
-- Moving to a compatible stack with new builder images for OS and prerequisites fixes, without involving developer.
-  - But developers also need to move up eventually as well
-- Moving to an incompatible stack. 
-- option to use Semantic versioning to pick up the latest stack version to be used for build
-
-There are a few different approaches:
-- Build and pipeline **configuration** is stored in Github with the source code. Any changes to source code, and build configuration requires a pull request and re-build. Note that **configuration** refers to the selection of `strategies`, environment variables, and variable substitutions. It does not refer to the strategy or pipeline definitions themselves.
-- The source repository stores a pointer, such as a version number, to a different repository that contains the build configuration. Changing build and pipeline configuration requires changing the configurations in the separate repository and changing the pointer itself in the source repository.
-- No information about build or pipeline configuration is stored with the source code.  Everything is stored externally in order to avoid developer changing the pipeline or build configuration.  Changes in build configuration or prerequisites does not require changing the source repository. A separate mechanism is used to track which strategy and configuration to use for a specific commit.
-
-#### Build and Pipeline Configuration With Semantic Version
-
-For the first approach with semantic versioning:
-- To repeat a build for a commit, extract the source repository for the commit, and all configuration should be available to repeat the build, except the stack, which is semantically version, may be at a high version.  If build fails due to new semantic versioning, fix the build.
-- To change prerequisites to a compatible prerequisites:
-   - update stack to new version
-   - Repeat the build  to pick up latest stack.
-- To change prerequisites to an  incompatible prerequisite:
-   - update stack to new version
-   - update source repository to point to new version
-   - Rerun test and fix PR if needed.
-
-
-For the second approach with semantic version:
-- To repeat a build for a commit, extract the source repository for the commit, and the separate configuration repository. If build fails due to semantic version, fix the PR. 
-- To update to semantically compatible prerequisites :
-  - Stack is updated.
-  - build is repeated, and if it fails, create and fix PR.
-- To update to semantically incompatible prerequisites :
-  - Stack is created.
-  - source configuration updated.
-  - new Test build initiated.
-
-The third approach requires external repository checkpoint to associate specific commits to its build configuration. This may be created manually, or automatically when a build is kicked off.
-- To repeat a build for a previous commit:
-   - locate the checkpoint and restart build using configuration of that checkpoint.
-- To move to semantically compatible prerequisite:
-  - Add stack  with new version
-  - Repeat the build for a commit.
-- To change to semantically incompatible prerequisite:
-  - Add stack with new version 
-  - Update the checkpoint to use stack
-  - Repeat build for a commit
-
-#### Build and Pipeline Configuration Without Semantic Version
-
-For the first approach without semantic version:
-- To repeat a build for a commit, extract the source repository for the commit, and all configuration is available to repeat the build. 
-- To move to compatible stack, update the configuration and create a PR to test.
-- to move to incompatible prerequisites, update the configuration and create PR to test.
-
-For the second approach without semantic version:
-- To repeat a build for a commit, extract the source repository for the commit, and the separate configuration repository, and all configuration is available to repeat the build. 
-- To move to semantically compatible stack:
-  - New stack is added.
-  - A new branch is created to update the stack version in the source repository.
-  - A PullRequest used for test build. If it fails, an issue is created. Otherwise, it it merged.
-- To move to semantically incompatible prerequisites : same as for compatible stack.
-
-
-For The third approach:
-- To repeat a build for a previous commit:
-   - locate the checkpoint and restart build using configuration of that checkpoint.
-- To move to a different but semantically compatible stack:
-  - Add stack  with new version
-  - Change checkpoint configuration point to new stack
-  - Repeat the build for a previous commit.
-- To move to semantically incompatible prerequisite: same as moving to semantically compatible stack.
-
-
-#### Deatiled Configurations
-
-For the first approach, a configuration file, kabanero-strategy.yaml, defines how repository events trigger a run of the strategy. For example,
-- event: Push
-  allowedBranches: master
-  resourcesDirectory: strategies/pushMaster
-- event: Push
-  allowedBranches: *
-  disAllowedBranches: master
-  resourcesDirectory: strategies/pushNonMaster
-- event: PullRquest
-  allowedBranches: master
-  resourcesDirectory: strategies/pullRequestMaster
-
-The directory strategies/pushMaster contains all the resources required to run the strategy for a Push request to `master` branch. One example is the StrategyRun resource to run the strategy:
-```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyRun
-metadata:
-  name: svc-a-strategy-${contextID}
-  namespace: svc-a-strategy
-spec:
-  strategy: one_stage
-  variables: 
-    - stack: "kabanero/node-js:0.2.2"
-    - name:  image
-      location: ${default-registry}/hello-world:0.0.1
-  emit: 
-    - name: Start_build
-```
-
-For the second approach, the source repository contains a configuration file, such as kabanero-strategy.yaml, with a version number for the strategy:
-```
-strategy-version: 0.2.1
-```
-
-A separate repository, or maybe the collection repository itself, has a directory structure containing the available strategies. For example,
-the directory hello-world/0.2.1 contains the trigger file, and the underneath the directory, the resources for strategy. To update the strategy, make a copy from 0.2.1 to 0.2.2, make the update, then create a PullRequest to update the original source to 0.2.2.
-
-For the third approach, the trigger file and the build configurations are stored with the collection, together with information about which configuration to use for a commit.
-- For repeatable build, 
-  - Create a new branch where repeating a build is required
-  - Perform a build using existing rules.  If the build does not work tweak the trigger to use a different strategy, and adjust the build configuration as needed.
-- For moving to a compatible stack, there is no change to the source code repository. However, a new compatible stack is added, and semantic versioning may be used to pick up the latest compatible stack on rebuild.  Pre-testing all applications and changes to the trigger and configuration is required.
-- For moving to an incompatible stack, the incompatible stack is added, and the checkpoint is updated to use the new stack. Source repository also requires code changes. A PR is used to test the changes.
-
-
-The following tables compare the three approaches:
-![Build Configuration Comparison](BuildConfigComparisonTable.jpg)
-![Build Configuration Comparison 2](BuildConfigComparisonTable2.jpg)
-![Build Configuration Comparison 3](BuildConfigComparisonTable3.jpg)
 
 
 ### Four Types of Repositories
