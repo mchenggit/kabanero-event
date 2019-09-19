@@ -374,7 +374,7 @@ spec:
   pipeline: appsody_build
   pipeline-namespace: kabanero
   trigger:
-    - Start_build: 
+    - name: Start_build: 
   emits:
     name: Build
     status: ${kabanero.stage.status}
@@ -485,7 +485,8 @@ See discussions later about whether triggers,  variable substitutions, and resou
 
 #### Register Web hook
 
-**TBD: This is to be implemented in Tekton.**
+**TBD: This is to be implemented in Tekton trigger.**
+
 Create and apply GithubEventSource.yaml to register a web hook. This example uses a repository web hook. 
 
 ```
@@ -609,11 +610,11 @@ The controller for MyDeployStage
 The controller for the StrategyRun monitors the status for each stage, and updates the overall status within the StrategyRun resource.
 
 
-### Persistent State
+### Persistent States
 
-The controller stores persistent state within the StrategyRun and StageRun resources. The persistent state allows the controller to be highly available. Should the controller be restarted, it uses the persistent states to determine how to resume. 
+The controllers store persistent states within the StrategyRun and StageRun resources. The persistent states allow the controller to be highly available. Should the controller be restarted, it uses the persistent states to determine how to resume.
 
-Kubernetes uses etcd to store the resources.  It is expected that etcd is highly available and scalable, or the Kubernetes cluster itself will be unstable.
+Kubernetes uses etcd to store the resources.  Etcd uses the `raft` distributed consensus protocol, which is similar to the Apache zookeeper protocol used by Kafka. We assume etcd is sufficiently highly available and scalable, as the entire Kubernetes infrastructure already depends on it. We don't need to use a different infrastructure that offers better quality of service than etcd, unless there is a reason to do so in the future.
 
 ### Other Usage Scenarios
 
@@ -626,7 +627,7 @@ metadata:
   name: my-app-strategy-test-run
   namespace: mayapp-strategy
 spec:
-  strategy: two_stage
+  strategy: two-stage
   contextID: my-test-run
   variables: 
     - stack: "kabanero/node-js:0.2"
@@ -644,6 +645,7 @@ To start a strategy on a timer, create a `cron` based trigger.
 For example, 
 ```
 - cron: "00 * * * *"
+  allowedBranches: master
   resourcesDirectory: strategies/buildMaster
 - event: Push
   allowedBranches: master
@@ -741,6 +743,8 @@ Note that when reverting back to an old commit, it also reverts back to the old 
 
 <a name="Functional_Specification"></a>
 ## Events Functional Specification
+
+**NOTE TO REVIEWERS: DO NOT PROCEED BEYOND THIS POINT. This is work in progress, and not ready for review. **
 
 Kabanero hosts an event infrastructure to allow system components to communicate with each other asynchronously. This enables an extensible framework whereby event topics, producers, and consumers may be added to implement additional system level function. 
 
