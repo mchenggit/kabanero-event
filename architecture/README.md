@@ -328,7 +328,7 @@ The diagram below is meant to illustrate a variety of scenarios that are enabled
 ![Motivating Scenarios ](MotivationScenarios.jpg)
 
 First, definitions:
-- A `strategy` defines a single high level pipeline, consisting of one or more `stages.
+- A `strategy` defines a single high level pipeline, consisting of one or more `stages`.
 - A `strategy` is triggered by an event to its starting `stage`. For example, the `stage` Build is triggered by the `Start_build` event.
 - Each of the internal `stages` is triggered by an event internal to the strategy.
 - Each `stage` of strategy is implemented by some other tool,  such as a Travis build (not yet supported by Kanabero), or a Tekton pipeline.  
@@ -353,7 +353,7 @@ This section contains a walkthrough for how to configure a Two stage strategy.
 When a collection is installed,  strategy CRD instances are also installed. These instances are applied and available in Kubernetes. For our example, they include:
 - Definition of the `Build` stage
 - Definition of the `Deploy` stage
-- Definition of of the `two_stage` strategy
+- Definition of of the `two-stage` strategy
 
 
 The definition of the `Build` stage uses the `TektonStage` custom resource. The `TekonStage` custom resource allows Kabanero to use a Tekton pipeline for a stage. it defines:
@@ -423,7 +423,6 @@ spec:
   - stage-bindings:
     - stageName: appsody_build
       stageKind: TektonStage
-      stage-local-name: Build
       resourceBindings:
         - inputBinding:
             - stageVariable: stack
@@ -435,7 +434,6 @@ spec:
               strategyVariable: app
     - stageName: my-deploy
       stageKind: MyDeployStage
-      stage-local-name: Deploy
       resourceBindings:
         - inputBinding:
             - stageVariable: image
@@ -444,7 +442,7 @@ spec:
 
 
 
-Triggers and variable substitutions and resources are used to define when and which strategy to apply. For our example, the trigger looks like:
+Triggers and variable substitutions and resources are used to define when and which strategy to apply. For our example, the trigger may look like:
 
 ```
 - event: Push
@@ -471,6 +469,7 @@ metadata:
   namespace: mayapp-strategy
 spec:
   strategy: two-stage
+  contextID: ${kabanero.context.ID}
   variables: 
     - stack: "${hello-world.stack}"
     - name: source
@@ -482,11 +481,12 @@ spec:
      name: Start_Build
 ```
 
-See discussions later about whether triggers,  variable substitutions, and resoruces should be stored in the source repository or with the collections.
+See discussions later about whether triggers,  variable substitutions, and resources should be stored in the source repository or with the collections.
 
 #### Register Web hook
 
-Create and apply GithubEventSource.yaml to register a web hook. This example uses a repository web hook. **TBD: This is to be implemented in Tekton.**
+**TBD: This is to be implemented in Tekton.**
+Create and apply GithubEventSource.yaml to register a web hook. This example uses a repository web hook. 
 
 ```
 apiVersion: tekton.dev/v1alpha1
@@ -501,12 +501,19 @@ spec:
 
 #### Web hook Processing
 
-Tekton Web hook listener receives web hook POST operation.  Kabanero plugin intercepts the event and emits Push event to the `/kabanero/instance/repository/github/org/repository` topic.
+Tekton Web hook listener receives web hook POST operation.  Kabanero plugin intercepts the event and emits Push event to the `/kabanero/kabanero/repository/github/org/repository` topic.  
 
 
 ####  Push event Processing
 
-Kabanero listener receives the Push event, locates the trigger file, then fetches the StrategyRun resource.  The resource is applied after variable substitution. The actual StrategyRun resource applied may look like:
+Kabanero repository event listener receives the Push event, then
+- extracts the trigger file from the source repository
+- locates the trigger
+- locates the resourceDirectory for the trigger
+- fetches the StrategyRun resource.  
+- applies the resources after variable substitution. 
+
+The actual StrategyRun resource applied may look like:
 
 ```
 apiVersion: kabanero.io/v1alpha1
@@ -516,6 +523,7 @@ metadata:
   namespace: mayapp-strategy
 spec:
   strategy: two_stage
+  contextID: 201909030817000
   variables: 
     - stack: "kabanero/node-js:0.2"
     - name: source
@@ -530,7 +538,7 @@ spec:
 
 ### Running the Strategy
 
-The controller for StrategyRun finds the corresponding StrategyDefinition `two_stage`, and creates the corresponding StageRuns. For our example, there are two stages:
+The controller for StrategyRun finds the corresponding StrategyDefinition `two-stage`, and creates the corresponding StageRuns. For our example, there are two stages:
 
 ```
 apiVersion: kabanero.io/v1alpha1
@@ -550,7 +558,8 @@ status:
 
 The Controller for TektonStage processes the creation of the StageRun object as follows:
 - Ensure that the stageKind is `TektonStage`, otherwise the resource is ignored.
-- Locate the `TektonStage` whose name is `appsody_build` and register to receive trigger events `Start_Build`.
+- Locate the `TektonStage` whose name is `appsody_build`  to find the trigger event
+- Register to receive trigger events `Start_Build`.
 
 
 ```
@@ -570,33 +579,41 @@ status:
 
 The Controller for MyDeployStage processes the creation of the StageRun object as follows:
 - Ensure that the stageKind is `MyDeployStage`, otherwise the resource is ignored.
-- Locate the `MyDeployStage` whose name is `my-deploy` and register to receive trigger events `Build(success)`.
+- Locate the `MyDeployStage` whose name is `my-deploy` to find the trigger event
+- Register to receive trigger events `Build(success)`.
 
 
-After all the StageRun resources are created, the controller emits the `Start_build` event to trigger the first stage.
+After all the StageRun resources are created, the controller for the StageRun emits the `Start_build` event to trigger the first stage.
 
 
 ### Running the Stages
 
 The controller for each stage is responsible for:
 - Creating listeners to listen for trigger events after `StageRun` resource is created.
-- When triggered, creating any additional resources, and run the stage.
+- When triggered, creating any additional resources to run the stage.
 - When completed, emit any configured events.
 
 For our example, the controller for TektonStage  
-- Creates a listener to listen for `Start_build` event after the StageRun resource is created.
+- Created a listener to listen for `Start_build` event after the StageRun resource was created.
 - When `Start-build` event is received, creates Tekton related resources to start the pipeline:
    - `PipelineResource`
    - `PipelineRun`
 - When the Tekton pipeline completes, emits `Build` event.
 
 The controller for MyDeployStage
-- Creates a listener to listen for `Build(success)` event after the StageRun resource is created.
-- when `Build(sucess)` event is received, performs whatever custom action is needed.
-- Upon completion, emit the `Deploy` event.
+- Created a listener to listen for `Build(success)` event after the StageRun resource was created.
+- when `Build(sucess)` event is received, performs custom action.
+- Upon completion, emits the `Deploy` event.
 
 
 The controller for the StrategyRun monitors the status for each stage, and updates the overall status within the StrategyRun resource.
+
+
+### Persistent State
+
+The controller stores persistent state within the StrategyRun and StageRun resources. The persistent state allows the controller to be highly available. Should the controller be restarted, it uses the persistent states to determine how to resume. 
+
+Kubernetes uses etcd to store the resources.  It is expected that etcd is highly available and scalable, or the Kubernetes cluster itself will be unstable.
 
 ### Other Usage Scenarios
 
@@ -610,6 +627,7 @@ metadata:
   namespace: mayapp-strategy
 spec:
   strategy: two_stage
+  contextID: my-test-run
   variables: 
     - stack: "kabanero/node-js:0.2"
     - name: source
@@ -621,39 +639,50 @@ spec:
      name: Start_Build
 ```
 
-To start a strategy on a timer, create a `cron` based StrategyTrigger. This trigger may be stored with the collection and started automatically. For example, to do hourly build from master branch of myapp:
+
+To start a strategy on a timer, create a `cron` based trigger.  
+For example, 
 ```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyTrigger
-metadata:
-  name: hourly-build-myapp
-  namespace: kabanero
-spec:
-  cron: "00 * * * *"
-  resourcesDirectory: myapp/strategies/buildMaster
+- cron: "00 * * * *"
+  resourcesDirectory: strategies/buildMaster
+- event: Push
+  allowedBranches: master
+  resourceDirectory: strategies/pushMaster
+- event: Push
+  allowedBranches: *
+  disAllowedBranches: master
+  resourceDirectory: strategies/pushNonMaster
+- event: PullRequest
+  allowedBranches: master
+  resourcesDirectory: strategies/pullRequestMaster
+- variables:
+  - hello-world.stack: "kabanero/node-js:0.2"
 ```
 
-
-To start a strategy based on an event, use an event based StrategyTrigger. For example, to re-run FVT of myapp based on Integration_A event:
+Non-repository based events may also be used to start a strategy. For example, to re-run FVT of myapp based on Integration_A event:
 ```
-apiVersion: kabanero.io/v1alpha1
-kind: StrategyTrigger
-metadata:
-  name: myapp-svc-a-trigger
-  namespace: kabanero
-spec:
-  - trigger:
-    - name: Integration_a
-  - resourcdeDirectory: myapp/strategies/rerun-fvt
-  - variables
-    name1: ${kabanero.event.attribute1}
-    name2: ${kabanero.event.attribute2}
+- event: Integration_a
+  resourcesDirectory: strategies/rerun-fvt
+- cron: "00 * * * *"
+  resourcesDirectory: strategies/buildMaster
+- event: Push
+  allowedBranches: master
+  resourceDirectory: strategies/pushMaster
+- event: Push
+  allowedBranches: *
+  disAllowedBranches: master
+  resourceDirectory: strategies/pushNonMaster
+- event: PullRequest
+  allowedBranches: master
+  resourcesDirectory: strategies/pullRequestMaster
+- variables:
+  - hello-world.stack: "kabanero/node-js:0.2"
 ```
 
 
 ### Discussion on Where to Store Strategy Parameters for a Repository
 
-The strategy parameters are the definitions of triggers, variable substitutions, and resources required initiate a strategy based on operations to the source repository. Where these parameters are stored have implications on how to support these scenarios:
+The strategy parameters are the definitions of triggers, variable substitutions, and resources required initiate a strategy. Where these parameters are stored have implications on how to support these scenarios:
 - Reverting to an older commit. For example, reverting from 2.0.10 to 2.0.8
 - Creating a branch based on an old commit. For example, creating a branch based on 2.0.5.
 
@@ -664,22 +693,22 @@ The second option is to store a pointer within the source repository, with the p
 - Updates to the parameters requires updating two places:
   - First, update the collection and create a new pointer
   - Second, update the source repository with the new pointer.
-- Old pointers have to remain valid after reversion.
+- Old pointers have to be valid before performing reversion.
 
 The third option is to store the parameters outside of the source repository with additional bookkeeping to identify which parameters are suitable for which branches/commits of the source repository. This option bypasses using the source repository to maintain history, is the most difficult to implement, but has the advantage of isolating the management of the parameters outside of the source repository.
 
-The recommendation is to store the parameters with the source repository until there is a strong requirement for isolation. Existing CI/CD tools such as Travis, Jenkins, Gitlab, Azure Pipelines store configuration within the source repository. 
+The recommendation is to store the parameters with the source repository until there is a strong requirement for isolation. 
 
 ### Discussion on Forked Repository
 
-When a repository is forked, strategy parameters are forked as well. These parameters are not applicable to the forked repository. If code changes in the forked repository only run through unit tests in the developer environment, then is not an issue.  After unit testing, a pull request back to the original repository may be used, and it works the same way as a pull request from a branch in the source repository.
+When a repository is forked, strategy parameters are forked as well. These parameters are not applicable to the forked repository. If code in the forked repository are only unit tested, then is not an issue.  After unit testing, a pull request back to the original repository may be used, and it works the same way as any other pull request.
 
 If the requirement is to run separate strategies for the forked repository, then it can be done as follows:
 - A new web hook listener is created for the forked repository. 
 - New strategy parameters are created for the forked repository, stored in a non-default location to not conflict with the original.
 - PullRequests may:
    - cherry-pick only those commits related to source code changes, or
-   - include strategy parameters  changes at non-default location if the owner of original repository allows it. This reduces the overhead of having to cherry-pick commits commits.
+   - include strategy parameters at non-default location if the owner of original repository allows it. This reduces the overhead of having to cherry-pick commits.
 
 
 ### Discussion on Semantic Versioning 
@@ -689,7 +718,17 @@ The requirements are:
 - Stacks may be updated without informing the developer.
 - Allow broken projects time to get fixed.
 
-The first option to support above scenarios is to allow developers to use semantic versioning in the development environment, but to use exact version in the strategy parameters. The process to update to a compatible stack is as follows:
+The first option is to use semantic versioning for the strategy parameters as well. The process is as follows:
+- For each project, create an "update" branch, and change the stack version number to an exact version, e.g., from 0.2 to 0.2.3.
+- A "update" strategy is run against the "update" branch.
+- For each application where the strategy fails :
+   - Fix the code first in the "update" branch for "0.2.3"
+   - use PR to merge source code changes back to the main branch.
+- Upon completion of all projects, the stack 0.2 is updated to be the same as 0.2.3 so that developer and strategies automatically picks up the latest.
+
+Note that when reverting back to an old commit, semantic version still takes place for the strategy.
+
+The second option is to use semantic versioning in developer environment, but exact version for strategy parameters. The process to update to a compatible stack is as follows:
 - For each project, create an "update" branch, and change the stack version number, e.g., from 0.2.2 to 0.2.3.
 - Create a Pull Request, and let the update strategy run. 
 - If the strategy succeeds, merge takes place, and the project is now at the updated version.
@@ -699,15 +738,6 @@ The first option to support above scenarios is to allow developers to use semant
 Note that when reverting back to an old commit, it also reverts back to the old version.  To move up to the latest, a new PR is needed.
 
 
-The second option is to use semantic versioning for the strategy parameters as well. The process is as follows:
-- For each project, create an "update" branch, and change the stack version number to an exact version, e.g., from 0.2 to 0.2.3.
-- A "update" strategy is run against the "update" branch.
-- For each application where the strategy fails :
-   - Fix the code first in the "update" branch for "0.2.3"
-   - use PR to merge source code changes back to the main branch.
-- Upon completion of all projects, the stack 0.2 is updated to be the same as 0.2.3 so that developer and strategies automatically picks up the latest.
-
-Note that when reverting back to an old commit, semantic version still takes place for the strategy.
 
 <a name="Functional_Specification"></a>
 ## Events Functional Specification
