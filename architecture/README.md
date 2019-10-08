@@ -1,4 +1,4 @@
-# Kabanero Event Architecture
+# Kabanero kvent Architecture
 
 ## Table of Contents
 * [Introduction](#Introduction)
@@ -6,7 +6,7 @@
 * [Kabanero High Level Usage Scenarios](#Usage_Scenarios)
 * [Introduction to Event Triggered Pipeline Strategies](#Event_Intro)
 * [Events Functional Specification](#Functional_Specification)
-* [Staging](#Staging)
+* [Organizational Web hook Prototype][Org_Webhook_Prototype]
 
 
 <a name="Introduction"></a>
@@ -318,6 +318,8 @@ For Github and Github Enterprise:
 <a name="Event_Intro"></a>
 ## Introduction to Event Triggered Pipeline Strategies
 
+**NOTE TO REVIEWERS: IGNORE THIS SECTION. This is part of an old design.** 
+
 Kabanero enables a devops/solution architect to define the processes to manage a devops environment. At the center of this architecture is an event triggered pipeline strategy.
 
 ###  Motivating Scenarios
@@ -363,6 +365,7 @@ The definition of the `Build` stage uses the `TektonStage` custom resource. The 
 
 The input and output resources are the same as the pipeline. Pre-defined variable  `kabaoer.stage.status` contains the status of the stage.
 
+**TBD: We will treat Tekton as built-in. There is no need for a separate TektonStage kind**.
 
 ```
 apiVersion: kabanero.io/v1alpha1
@@ -406,6 +409,7 @@ The StrategyDefinition CRD defines a strategy instance.  For our example, it inc
 - stages to incorporate. In our example, it is the build and deploy stages.
 - mapping of strategy wide resources to stage resources.
 
+
 ```
 apiVersion: kabanero.io/v1alpha1
 kind: StrategyDefinition
@@ -420,9 +424,9 @@ spec:
         type: "Github"
       - name: "app"
         type: "image"
-  - stage-bindings:
-    - stageName: appsody_build
-      stageKind: TektonStage
+  - stages:
+    - name: appsody_build
+      kind: Pipeline
       resourceBindings:
         - inputBinding:
             - stageVariable: stack
@@ -432,15 +436,18 @@ spec:
         - outputBinding:
             - stageVariable: image
               strategyVariable: app
-    - stageName: my-deploy
-      stageKind: MyDeployStage
+      trigger:
+        - name: Start_build: 
+      emits:
+        name: Build
+        status: ${kabanero.stage.status}
+    - name: my-deploy
+      kind: MyDeployStage
       resourceBindings:
         - inputBinding:
             - stageVariable: image
               strategyVariable: app
 ```
-
-
 
 Triggers and variable substitutions and resources are used to define when and which strategy to apply. For our example, the trigger may look like:
 
@@ -458,7 +465,6 @@ Triggers and variable substitutions and resources are used to define when and wh
 - variables:
   - hello-world.stack: "kabanero/node-js:0.2"
 ```
-
 
 Each of the `resoucreDirectory` contains the resources to be applied to implement the strategy, with appropriate variable substitution. For example, the directory strategies/pushMaster may contain a StrategyRun resource used to initiate a run of a strategy:
 ```
@@ -480,6 +486,8 @@ spec:
   emit:
      name: Start_Build
 ```
+
+**TBD: If the only pipeline to be run is a Tekton pipeline, then the `resourceDirectory` may contain just `PipelineRun` and `PipelineResource`*
 
 See discussions later about whether triggers,  variable substitutions, and resources should be stored in the source repository or with the collections.
 
@@ -744,7 +752,7 @@ Note that when reverting back to an old commit, it also reverts back to the old 
 <a name="Functional_Specification"></a>
 ## Events Functional Specification
 
-**NOTE TO REVIEWERS: DO NOT PROCEED BEYOND THIS POINT. This is work in progress, and not ready for review. **
+**NOTE TO REVIEWERS: IGNORE THIS SECTION. This is part of an old design.** 
 
 Kabanero hosts an event infrastructure to allow system components to communicate with each other asynchronously. This enables an extensible framework whereby event topics, producers, and consumers may be added to implement additional system level function. 
 
@@ -1483,21 +1491,468 @@ Note: For security reasons, Kubernetes Secrets are not stored in the `resource` 
 **TBD: Kabanero Operator related events**
 
 
-<a name="Staging"></a>
-## Staging
 
-October 2019:
-- Organizational web hook only without any of the CRDs
+<a name="Org_Webhook_Prototype"></a>
+## Organizational Web hooks 
 
-Or prioritized list (unlikely in Oct 2019):
-- update kabanero operator to install new code
-- No events: web hook listener directly creates StrategyRun resources.
-- Initial controller implementation to support CRDs (go?):
-   - TektonStage
-   - StrategyDefinition
-   - StrategyRun
-   - StageRun
-- automatic configuration of web hook via EventSource CRD (go?)
-- Install event infrastructure 
-- web hook listener uses events
-- Refine controllers
+This section contains the design for:
+- https://github.com/kabanero-io/roadmap/issues/94
+- https://github.com/kabanero-io/roadmap/issues/75
+
+#### Web hook Listener
+
+There is a single web hook listener shared by all Kabanero instances from a given Kabanero install. The web hook listener URL is of the form: 
+- `https:<host>:<port>/webhook/<type>/<instance>`, or
+- `https:<host>:<port>/webhook/<type>/<instance>/<secret>`
+where:
+- host/port is the listener endpoint when a route is created. **TBD: can the installer create a route automatically?**
+- `instance` is the name of the kabanero instance as defined by the kabanero CRD
+- `type` is one of the supported webhook types:
+   - github: the secret is part of HTTP header
+   - docker: the secret is in the URL
+
+**TBD: need to investigate whether https webhook is supported by docker. The documentation seems to suggest http only.**
+
+
+### Registration of github webhook
+
+The registration of the web hook is done manually, once per organization or user, through the Github UI. A single URL per Kabanero instance may be used to register all web hooks, including both organizational and user web hooks.
+
+The Kabanero CRD is enhanced to specify Github repositories and webhook secrets. A default webhook secret named `default-webhook-secret` is created in the Kabanero instance namespace when the Kabanero instance is created. It looks like:
+```
+apiVersion: v1
+kind: Secret
+metadata:
+  name: default-webhook-secret
+type: Opaque
+data:
+  secret: MWYyZDFlMmU2N2Rm
+```
+
+Here is an example of the CRD using default secret:
+
+```
+webhooks:
+  - type: github
+    url: https://github.com/owner/repo
+```
+
+Here is an example using non-default secret:
+```
+webhooks:
+  - type: github
+    url: https://github.com/owner/repo
+    secret: my-webhook-secret
+```
+
+### Registration of docker webhook
+
+Here is an example for docker using default secret:
+```
+webhooks:
+  - type: docker
+    url: https://registry.hub.docker.com
+```
+
+#### Webhook related event queues and event data structure
+
+For github events, the webhook listener emits events to the queue: `<instance>/repository`. The format of the event:
+```
+eventType: Repository
+type: github
+repositoryEventType: Push, PullRequest, etc.
+branch: name of the branch
+collectionId: appsody collection id, if any
+collectionVersion: appsody collection version, if any
+forkedFrom: information about the original repository if a fork.
+data: actual JSON data from github
+```
+
+For docker registry events, the webhook listener emits events to the queue: `<instance/registry>`. The format of the event:
+```
+eventType: Registry
+type: docker
+data: actual JSON data from docker
+```
+
+### Defining triggers
+
+Triggers map events to actions. Triggers are defined in one or more trigger files, consisting of: 
+- An expression variables section to define global constants that may be used in expression evaluations. 
+- A permission section to determine whether an event is permitted, forbidden, or to be ignored.
+- A manifest variables section to define values for trigger independent manifest variables to be substituted when applying Kubernetes resources as part of an action.
+- A trigger section to determine what actions to apply. The actions include:
+  - Applying Kubernetes resources with variable substitutions
+  - Emitting additional events.
+
+The Common Expression Language (CEL) is used to define expressions for triggers.
+
+#### built-in CEL variables
+
+** This is TBD**
+
+#### User provided CEL constants
+
+Here are some examples:
+```
+expression-variables:
+  - name: orgs
+    value: ['org1', 'org2', 'org3']
+  - name: disallowedForkedRepositories
+    value: [ 'hello-world', 'my-pet-project' ]
+  - name: disallowedOwners
+    value: [ 'mcheng'  ]
+  - name: repositoryEventsToProcess
+    value: [ 'Push', 'PullRequest'  ]
+```
+
+#### Permission section
+
+Only those events that pass permission checks are processed. An event passes permission check when:
+- It passes one of the `permit` filter.  
+- It does not pass any `forbid` filter. 
+- It does not pass any `ignore` filter.
+
+Common Expression Language is used to specify the conditions.
+
+```
+permissions:
+  - permit: 
+     - when "event.eventType =='RepositoryEvent' 
+         # allow repository events for our org 
+       - when: event.data.repository.owner.name in orgs"
+         # allow forks from our org's repositories
+       - when event.forkedFrom.owner.name in orgs"
+
+       # allow all registry events
+     - when "event.eventType == "RegistryEvent'"
+
+  - # Disallow forked repository from disallowed list
+  - forbid: 
+     - when:  "event.eventType =='RepositoryEvent' 
+       - when: event.forked == 'true' && event.data.repository.name in disallowedForkedRepositories " 
+       - when: event.repository.owner.name in disallowedsers"
+
+    # Ignore events that are neither Push nor PullRequest
+  - ignore: 
+    - when "event.eventType == 'RepositoryEvent' &&  ! (event.repositoryEventType in  repositoryEventsToProcess)"
+
+````
+
+#### manifest variables section
+
+The manifest variable section is used to define trigger independent variable used in substitution of Kubernetes manifest resources. The values are evaluated using CEL.
+
+**TBD: If we allow CEL expressions in substitutions it'll be more flexible but much more work. Maybe can add it later**
+```
+manifest-variables:
+ - when: event.eventType == 'RepositoryEvent' 
+    - name: build-namespace
+      value: "event.data.repository.owner.name in orgs) ? "" : event.data.repository.owner.name + '-') + event.data.repository.repository.name"
+    - name: kabanero.repository.owner
+      value: event.data.repository.owner.name
+    - name: kabanero.repository.name
+      value: event.data.repository.name
+    - name: kabanero.repository.branch
+      value: event.branch
+    - name: kabanero.repository.url
+      value: event.data.repository.url
+    - when: has(event.collectionId)
+      name: collectionId
+      value: event.collectionId
+  - name: docker-registry
+    value: hub.docker.io
+```
+
+#### triggers
+
+Triggers are used to determine what actions to take based on events. The actions include:
+- applying Kubernetes manifest resources
+- emitting additional events.
+
+For example:
+```
+triggers:
+    - when: "has(event.repositoryEventType)"
+      # Repository events
+      -  when has(event.collectionId)
+         # appsody repository event
+         - when event.data.repository.owner.name in orgs && event.data.repository.ref.endWith('/master')
+           # affects master repo for our orgs
+           - when: "event.repositoryEventType == 'Push'"
+             # Push to master
+             applyResources:
+                 variables:
+                   - name: kabanero.pipeline.name
+                     value: {{collectionId}}-build-pipeline-run-{{kabanero.job.id}}
+                 directory: manifests/appsody/pushMaster
+                 emitEvent:
+                  eventFile: manifests/events/pushMaster/pipeline_status.yaml
+           - when: event.repositoryEventType == "PullRequest"
+             # Pull Request to master
+                 applyResources:
+                     directory: manifests/appsody/pullRequestMaster
+                     emitEvent:
+                        eventFile: ...
+           - otherwise:
+             # Everything else
+             emitEvent:
+                 eventFile: manifests/events/unableToProcess.yaml
+    - when: "event.eventType == 'RegisterEvent'"
+      # registry event
+      ...
+```
+
+##### Action to Apply Kubernetes Resources
+
+When the applyResources action, the resources in the `directory` are applied after variable substitution using manifest variables. Here is an example for manifest/appsody/pushMaster:
+
+```
+apiVersion: tekton.dev/v1alpha1
+kind: PipelineRun
+metadata:
+  name:  {{kabanero.pipeline.name}}
+  namespace: {{build-namespace}}
+spec:
+  serviceAccount: appsody-sa
+  timeout: "1h0m0s"  
+  pipelineRef:
+    name: {{collectionId}}-build-pipeline-run
+  trigger:
+    type: manual
+  resources:
+    - name: git-source
+      resourceRef:
+        name: git-source-${kabanero.job.id}
+    - name: docker-image
+      resourceRef:
+        name: docker-image-${kabanero.job.id}
+```
+
+And the PipelineResource:
+
+```
+apiVersion: v1
+items:
+- apiVersion: tekton.dev/v1alpha1
+  kind: PipelineResource
+  metadata:
+    name: docker-image-${kabanero.job.id}
+  spec:
+    params:
+    - name: url
+      value: {{docker-registry}}/{{kabanero.repository.owner}}/{{kabanero.repository.name}}
+    type: image
+- apiVersion: tekton.dev/v1alpha1
+  kind: PipelineResource
+  metadata:
+    name: git-source
+  spec:
+    params:
+    - name: revision
+      value: {{kabanero.repository.branch}}
+    - name: url
+      value: {{kabanero.repository.url}}
+    type: git
+```
+
+The pre-defined variable are:
+- `kabanero.job.id`: A unique ID that for a new run
+
+##### Action to emit events
+
+When emitting an event, the template for the event is stored in the event file. The content of the event is a YAML file. For example, the content of the file may be:
+```
+eventType: PipelineStatus
+type: tekton
+name: {{kabanero.pipeline.name}}
+jobid: {{kabanero.job.id}}
+outcome: {{kabanero.job.status}}
+```
+
+#### Location of Trigger File(s)
+
+The trigger file is placed in the collection at the top level. Other possible locations include:
+- within the collection itself
+- across multiple collection repositories.
+
+What it means to support merging/override across multiple locations is TBD.
+
+#### Staging
+
+Stage 0:
+- Create webhook listener
+- Create a collection with trigger file at top level
+  - Trigger file will result in running one of the pre-built pipelines in the collection.
+
+
+### Sample Github Events
+Sample push event:
+
+```
+---
+ref: refs/heads/master
+before: 552d591d527e555f003abf005efba3a7096fde07
+after: 04ee943b8dc178ea7e13cca2dbc197128dca31c7
+repository:
+  id: 200236911
+  node_id: MDEwOlJlcG9zaXRvcnkyMDAyMzY5MTE=
+  name: appsody-test-project
+  full_name: mchenggit/appsody-test-project
+  private: false
+  owner:
+    name: mchenggit
+    email: mcheng@us.ibm.com
+    login: mchenggit
+    id: 23053528
+    node_id: MDQ6VXNlcjIzMDUzNTI4
+    avatar_url: https://avatars3.githubusercontent.com/u/23053528?v=4
+    gravatar_id: ''
+    url: https://api.github.com/users/mchenggit
+    html_url: https://github.com/mchenggit
+    followers_url: https://api.github.com/users/mchenggit/followers
+    following_url: https://api.github.com/users/mchenggit/following{/other_user}
+    gists_url: https://api.github.com/users/mchenggit/gists{/gist_id}
+    starred_url: https://api.github.com/users/mchenggit/starred{/owner}{/repo}
+    subscriptions_url: https://api.github.com/users/mchenggit/subscriptions
+    organizations_url: https://api.github.com/users/mchenggit/orgs
+    repos_url: https://api.github.com/users/mchenggit/repos
+    events_url: https://api.github.com/users/mchenggit/events{/privacy}
+    received_events_url: https://api.github.com/users/mchenggit/received_events
+    type: User
+    site_admin: false
+  html_url: https://github.com/mchenggit/appsody-test-project
+  description: 
+  fork: true
+  url: https://github.com/mchenggit/appsody-test-project
+  forks_url: https://api.github.com/repos/mchenggit/appsody-test-project/forks
+  keys_url: https://api.github.com/repos/mchenggit/appsody-test-project/keys{/key_id}
+  collaborators_url: https://api.github.com/repos/mchenggit/appsody-test-project/collaborators{/collaborator}
+  teams_url: https://api.github.com/repos/mchenggit/appsody-test-project/teams
+  hooks_url: https://api.github.com/repos/mchenggit/appsody-test-project/hooks
+  issue_events_url: https://api.github.com/repos/mchenggit/appsody-test-project/issues/events{/number}
+  events_url: https://api.github.com/repos/mchenggit/appsody-test-project/events
+  assignees_url: https://api.github.com/repos/mchenggit/appsody-test-project/assignees{/user}
+  branches_url: https://api.github.com/repos/mchenggit/appsody-test-project/branches{/branch}
+  tags_url: https://api.github.com/repos/mchenggit/appsody-test-project/tags
+  blobs_url: https://api.github.com/repos/mchenggit/appsody-test-project/git/blobs{/sha}
+  git_tags_url: https://api.github.com/repos/mchenggit/appsody-test-project/git/tags{/sha}
+  git_refs_url: https://api.github.com/repos/mchenggit/appsody-test-project/git/refs{/sha}
+  trees_url: https://api.github.com/repos/mchenggit/appsody-test-project/git/trees{/sha}
+  statuses_url: https://api.github.com/repos/mchenggit/appsody-test-project/statuses/{sha}
+  languages_url: https://api.github.com/repos/mchenggit/appsody-test-project/languages
+  stargazers_url: https://api.github.com/repos/mchenggit/appsody-test-project/stargazers
+  contributors_url: https://api.github.com/repos/mchenggit/appsody-test-project/contributors
+  subscribers_url: https://api.github.com/repos/mchenggit/appsody-test-project/subscribers
+  subscription_url: https://api.github.com/repos/mchenggit/appsody-test-project/subscription
+  commits_url: https://api.github.com/repos/mchenggit/appsody-test-project/commits{/sha}
+  git_commits_url: https://api.github.com/repos/mchenggit/appsody-test-project/git/commits{/sha}
+  comments_url: https://api.github.com/repos/mchenggit/appsody-test-project/comments{/number}
+  issue_comment_url: https://api.github.com/repos/mchenggit/appsody-test-project/issues/comments{/number}
+  contents_url: https://api.github.com/repos/mchenggit/appsody-test-project/contents/{+path}
+  compare_url: https://api.github.com/repos/mchenggit/appsody-test-project/compare/{base}...{head}
+  merges_url: https://api.github.com/repos/mchenggit/appsody-test-project/merges
+  archive_url: https://api.github.com/repos/mchenggit/appsody-test-project/{archive_format}{/ref}
+  downloads_url: https://api.github.com/repos/mchenggit/appsody-test-project/downloads
+  issues_url: https://api.github.com/repos/mchenggit/appsody-test-project/issues{/number}
+  pulls_url: https://api.github.com/repos/mchenggit/appsody-test-project/pulls{/number}
+  milestones_url: https://api.github.com/repos/mchenggit/appsody-test-project/milestones{/number}
+  notifications_url: https://api.github.com/repos/mchenggit/appsody-test-project/notifications{?since,all,participating}
+  labels_url: https://api.github.com/repos/mchenggit/appsody-test-project/labels{/name}
+  releases_url: https://api.github.com/repos/mchenggit/appsody-test-project/releases{/id}
+  deployments_url: https://api.github.com/repos/mchenggit/appsody-test-project/deployments
+  created_at: 1564751493
+  updated_at: '2019-08-02T13:11:36Z'
+  pushed_at: 1570105921
+  git_url: git://github.com/mchenggit/appsody-test-project.git
+  ssh_url: git@github.com:mchenggit/appsody-test-project.git
+  clone_url: https://github.com/mchenggit/appsody-test-project.git
+  svn_url: https://github.com/mchenggit/appsody-test-project
+  homepage: 
+  size: 10
+  stargazers_count: 0
+  watchers_count: 0
+  language: Java
+  has_issues: false
+  has_projects: true
+  has_downloads: true
+  has_wiki: true
+  has_pages: false
+  forks_count: 0
+  mirror_url: 
+  archived: false
+  disabled: false
+  open_issues_count: 0
+  license: 
+  forks: 0
+  open_issues: 0
+  watchers: 0
+  default_branch: master
+  stargazers: 0
+  master_branch: master
+pusher:
+  name: mchenggit
+  email: mcheng@us.ibm.com
+sender:
+  login: mchenggit
+  id: 23053528
+  node_id: MDQ6VXNlcjIzMDUzNTI4
+  avatar_url: https://avatars3.githubusercontent.com/u/23053528?v=4
+  gravatar_id: ''
+  url: https://api.github.com/users/mchenggit
+  html_url: https://github.com/mchenggit
+  followers_url: https://api.github.com/users/mchenggit/followers
+  following_url: https://api.github.com/users/mchenggit/following{/other_user}
+  gists_url: https://api.github.com/users/mchenggit/gists{/gist_id}
+  starred_url: https://api.github.com/users/mchenggit/starred{/owner}{/repo}
+  subscriptions_url: https://api.github.com/users/mchenggit/subscriptions
+  organizations_url: https://api.github.com/users/mchenggit/orgs
+  repos_url: https://api.github.com/users/mchenggit/repos
+  events_url: https://api.github.com/users/mchenggit/events{/privacy}
+  received_events_url: https://api.github.com/users/mchenggit/received_events
+  type: User
+  site_admin: false
+created: false
+deleted: false
+forced: false
+base_ref: 
+compare: https://github.com/mchenggit/appsody-test-project/compare/552d591d527e...04ee943b8dc1
+commits:
+- id: 04ee943b8dc178ea7e13cca2dbc197128dca31c7
+  tree_id: ef137fe681c49f59adfcefa111cd298b503c87b4
+  distinct: true
+  message: Update HealthEndpointTest.java
+  timestamp: '2019-10-03T07:32:00-05:00'
+  url: https://github.com/mchenggit/appsody-test-project/commit/04ee943b8dc178ea7e13cca2dbc197128dca31c7
+  author:
+    name: mchenggit
+    email: mcheng@us.ibm.com
+    username: mchenggit
+  committer:
+    name: GitHub
+    email: noreply@github.com
+    username: web-flow
+  added: []
+  removed: []
+  modified:
+  - src/test/java/it/dev/appsody/starter/HealthEndpointTest.java
+head_commit:
+  id: 04ee943b8dc178ea7e13cca2dbc197128dca31c7
+  tree_id: ef137fe681c49f59adfcefa111cd298b503c87b4
+  distinct: true
+  message: Update HealthEndpointTest.java
+  timestamp: '2019-10-03T07:32:00-05:00'
+  url: https://github.com/mchenggit/appsody-test-project/commit/04ee943b8dc178ea7e13cca2dbc197128dca31c7
+  author:
+    name: mchenggit
+    email: mcheng@us.ibm.com
+    username: mchenggit
+  committer:
+    name: GitHub
+    email: noreply@github.com
+    username: web-flow
+  added: []
+  removed: []
+  modified:
+  - src/test/java/it/dev/appsody/starter/HealthEndpointTest.java
+```
