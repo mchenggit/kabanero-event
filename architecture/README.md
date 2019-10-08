@@ -1688,7 +1688,7 @@ triggers:
                  directory: manifests/appsody/pushMaster
                  emitEvent:
                   eventFile: manifests/events/pushMaster/pipeline_status.yaml
-           - when: event.repositoryEventType == "PullRequest"
+           - when: "event.repositoryEventType == "PullRequest"
              # Pull Request to master
                  applyResources:
                      directory: manifests/appsody/pullRequestMaster
@@ -1705,7 +1705,7 @@ triggers:
 
 ##### Action to Apply Kubernetes Resources
 
-When the applyResources action, the resources in the `directory` are applied after variable substitution using manifest variables. Here is an example for manifest/appsody/pushMaster:
+With the applyResources action, the resources in the `directory` are applied after variable substitution using manifest variables. Here is an example for manifest/appsody/pushMaster:
 
 ```
 apiVersion: tekton.dev/v1alpha1
