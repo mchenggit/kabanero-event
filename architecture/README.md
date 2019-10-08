@@ -1756,6 +1756,8 @@ items:
     type: git
 ```
 
+The files in the `directory` are processed in alphabetical order.
+
 The pre-defined variable are:
 - `kabanero.job.id`: A unique ID that for a new run
 
@@ -1772,18 +1774,29 @@ outcome: {{kabanero.job.status}}
 
 #### Location of Trigger File(s)
 
-The trigger file is placed in the collection at the top level. Other possible locations include:
+The trigger file is placed in the collection repository at the top level. Other possible locations include:
 - within the collection itself
 - across multiple collection repositories.
 
-What it means to support merging/override across multiple locations is TBD.
+What it means to support merging/override of multiple triggers is TBD.
+
+Here is an example of an update to the kabanero-index.yaml:
+```
+apiVersion: v2 
+  triggers:
+    - description: triggers for this collection
+      url: https://github.com/kabanero-io/collections/releases/download/v0.2.0-beta1/incubator.common.trigger.default.tar.gz
+  stacks:
+    - default-image: java-microprofile
+    ...
+```
 
 #### Staging
 
 Stage 0:
 - Create webhook listener
-- Create a collection with trigger file at top level
-  - Trigger file will result in running one of the pre-built pipelines in the collection.
+- Create a sample collection with trigger file at top level:
+  - Trigger file will result in running one of the pre-built pipelines in the appsody collection.
 
 
 ### Sample Github Events
