@@ -1556,7 +1556,7 @@ webhooks:
 
 #### Webhook related event queues and event data structure
 
-For github events, the webhook listener emits events to the queue: `<instance>/repository`. The format of the event:
+For github events, the webhook listener emits events to the queue: `kabanero/<instance>/repository`. The format of the event:
 ```
 eventType: Repository
 type: github
@@ -1568,7 +1568,7 @@ forkedFrom: information about the original repository if a fork.
 data: actual JSON data from github
 ```
 
-For docker registry events, the webhook listener emits events to the queue: `<instance/registry>`. The format of the event:
+For docker registry events, the webhook listener emits events to the queue: `kabaneor/<instance/registry>`. The format of the event:
 ```
 eventType: Registry
 type: docker
@@ -1577,15 +1577,14 @@ data: actual JSON data from docker
 
 ### Defining triggers
 
-Triggers map events to actions. Triggers are defined in one or more trigger files, consisting of: 
-- An expression variables section to define global constants that may be used in expression evaluations. 
+Triggers map events to actions. The Common Expression Language (CEL) is used to define expressions for triggers. Triggers are defined in one or more trigger files, consisting of: 
+- A constant section to pre-define CEL variables that may be used in expression evaluations.
 - A permission section to determine whether an event is permitted, forbidden, or to be ignored.
 - A manifest variables section to define values for trigger independent manifest variables to be substituted when applying Kubernetes resources as part of an action.
 - A trigger section to determine what actions to apply. The actions include:
   - Applying Kubernetes resources with variable substitutions
   - Emitting additional events.
 
-The Common Expression Language (CEL) is used to define expressions for triggers.
 
 #### built-in CEL variables
 
@@ -1595,7 +1594,7 @@ The Common Expression Language (CEL) is used to define expressions for triggers.
 
 Here are some examples:
 ```
-expression-variables:
+expression-constants:
   - name: orgs
     value: ['org1', 'org2', 'org3']
   - name: disallowedForkedRepositories
@@ -1610,11 +1609,12 @@ expression-variables:
 
 Only those events that pass permission checks are processed. An event passes permission check when:
 - It passes one of the `permit` filter.  
-- It does not pass any `forbid` filter. 
-- It does not pass any `ignore` filter.
+- It pass none of the `forbid` filter. 
+- It passses none of the `ignore` filter.
 
-Common Expression Language is used to specify the conditions.
+**TBD: emitting audit records**
 
+Here is an example:
 ```
 permissions:
   - permit: 
@@ -1641,9 +1641,10 @@ permissions:
 
 #### manifest variables section
 
-The manifest variable section is used to define trigger independent variable used in substitution of Kubernetes manifest resources. The values are evaluated using CEL.
+The manifest variable section is used to define trigger independent variables used in substitution of Kubernetes manifest resources. The values are evaluated using CEL. The Kubernetes resources are Go templates and the substitutions follow Go template rules.
 
 **TBD: If we allow CEL expressions in substitutions it'll be more flexible but much more work. Maybe can add it later**
+**TBD: should we use some other templating syntax, such as openshift template, or Helm template syntax?**
 ```
 manifest-variables:
  - when: event.eventType == 'RepositoryEvent' 
@@ -1679,29 +1680,56 @@ triggers:
          # appsody repository event
          - when event.data.repository.owner.name in orgs && event.data.repository.ref.endWith('/master')
            # affects master repo for our orgs
+
            - when: "event.repositoryEventType == 'Push'"
+             variables:
+               - name: kabanero.pipeline.name
+                 value: "event.collectionId + '-build-pipeline-run-' + kabanero.jobid"
              # Push to master
-             applyResources:
-                 variables:
-                   - name: kabanero.pipeline.name
-                     value: {{collectionId}}-build-pipeline-run-{{kabanero.job.id}}
-                 directory: manifests/appsody/pushMaster
-                 emitEvent:
-                  eventFile: manifests/events/pushMaster/pipeline_status.yaml
+             actions:
+               - emitEvent:
+                 eventFile: manifests/events/pushMaster/pipeline_status.yaml
+               - applyResources:
+                  directory: manifests/appsody/pushMaster
+               - action-after: 
+                 succeeded:
+                   - emitEvent:
+                     eventFile: manifests/events/pushMaster/pipeline_status.yaml
+                 failed:
+                   - emitEvent:
+                     eventFile: manifests/events/pushMaster/pipeline_status.yaml
+                 any:
+                   ...
+
            - when: "event.repositoryEventType == "PullRequest"
              # Pull Request to master
-                 applyResources:
-                     directory: manifests/appsody/pullRequestMaster
-                     emitEvent:
-                        eventFile: ...
-           - otherwise:
-             # Everything else
-             emitEvent:
-                 eventFile: manifests/events/unableToProcess.yaml
+              action:
+                - emitEvent:
+                  eventFile: manifests/events/pushMaster/pipeline_status.yaml
+                - applyResources:
+                  directory: manifests/appsody/pullRequestMaster
+                - action-after:
+                  succeeded:
+                    - emitEvent:
+                       eventFile: manifests/events/pushMaster/pipeline_status.yaml
+
     - when: "event.eventType == 'RegisterEvent'"
       # registry event
       ...
+
+    - when-no-match:
+      action:
+         - emitEvent:
+           eventFile: manifests/events/unableToProcess.yaml
+
 ```
+
+Note that for `action-after`, Kabanoero only supports determinign resource status for a subset of resources. Currently, the list includes:
+- Tekton pipeline
+
+For those resources supported by Kabanero, the actions in `succeeded` or `failed` are executed, depending on the outcome of the action. For those resources not supported by Kabanero, or if the same actions-after should be taken irrespective of whether the action succeeded, use the `any` attribute to specify the actions to take.
+
+**TBD: What are the built-in variables to represent the state of actions? What if multiple supported resources are applied?**
 
 ##### Action to Apply Kubernetes Resources
 
@@ -1723,10 +1751,10 @@ spec:
   resources:
     - name: git-source
       resourceRef:
-        name: git-source-${kabanero.job.id}
+        name: git-source-${kabanero.jobid}
     - name: docker-image
       resourceRef:
-        name: docker-image-${kabanero.job.id}
+        name: docker-image-${kabanero.jobid}
 ```
 
 And the PipelineResource:
@@ -1737,7 +1765,7 @@ items:
 - apiVersion: tekton.dev/v1alpha1
   kind: PipelineResource
   metadata:
-    name: docker-image-${kabanero.job.id}
+    name: docker-image-${kabanero.jobid}
   spec:
     params:
     - name: url
@@ -1759,7 +1787,7 @@ items:
 The files in the `directory` are processed in alphabetical order.
 
 The pre-defined variable are:
-- `kabanero.job.id`: A unique ID that for a new run
+- `kabanero.jobid`: A unique ID that for a new run
 
 ##### Action to emit events
 
@@ -1768,7 +1796,7 @@ When emitting an event, the template for the event is stored in the event file. 
 eventType: PipelineStatus
 type: tekton
 name: {{kabanero.pipeline.name}}
-jobid: {{kabanero.job.id}}
+jobid: {{kabanero.jobid}}
 outcome: {{kabanero.job.status}}
 ```
 
