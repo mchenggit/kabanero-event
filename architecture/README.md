@@ -1501,6 +1501,8 @@ This section contains the design for:
 
 #### Web hook Listener
 
+Note: The number of listeners will depend on what the operator supports moving to Openshift 4.1. It may either be one per Kabanero install, or one more Kabanero CRD instance.
+
 There is a single web hook listener shared by all Kabanero instances from a given Kabanero install. The web hook listener URL is of the form: 
 - `https:<host>:<port>/webhook/<type>/<instance>`, or
 - `https:<host>:<port>/webhook/<type>/<instance>/<secret>`
@@ -1537,11 +1539,11 @@ webhooks:
     url: https://github.com/owner/repo
 ```
 
-Here is an example using non-default secret:
+Here is an example using non-default secret, and for an organizational webhook:
 ```
 webhooks:
   - type: github
-    url: https://github.com/owner/repo
+    url: https://github.com/owner
     secret: my-webhook-secret
 ```
 
@@ -1568,7 +1570,7 @@ forkedFrom: information about the original repository if a fork.
 data: actual JSON data from github
 ```
 
-For docker registry events, the webhook listener emits events to the queue: `kabaneor/<instance/registry>`. The format of the event:
+For docker registry events, the webhook listener emits events to the queue: `kabanero/<instance>/<registry>`. The format of the event:
 ```
 eventType: Registry
 type: docker
@@ -1610,7 +1612,7 @@ expression-constants:
 Only those events that pass permission checks are processed. An event passes permission check when:
 - It passes one of the `permit` filter.  
 - It pass none of the `forbid` filter. 
-- It passses none of the `ignore` filter.
+- It passes none of the `ignore` filter.
 
 **TBD: emitting audit records**
 
@@ -1643,8 +1645,8 @@ permissions:
 
 The manifest variable section is used to define trigger independent variables used in substitution of Kubernetes manifest resources. The values are evaluated using CEL. The Kubernetes resources are Go templates and the substitutions follow Go template rules.
 
-**TBD: If we allow CEL expressions in substitutions it'll be more flexible but much more work. Maybe can add it later**
 **TBD: should we use some other templating syntax, such as openshift template, or Helm template syntax?**
+**TBD: If we allow CEL expressions in substitutions it'll be more flexible but much more work. Maybe can add it later**
 ```
 manifest-variables:
  - when: event.eventType == 'RepositoryEvent' 
@@ -1724,7 +1726,7 @@ triggers:
 
 ```
 
-Note that for `action-after`, Kabanoero only supports determinign resource status for a subset of resources. Currently, the list includes:
+Note that for `action-after`, Kabanero only supports determining resource status for a subset of resources. Currently, the list includes:
 - Tekton pipeline
 
 For those resources supported by Kabanero, the actions in `succeeded` or `failed` are executed, depending on the outcome of the action. For those resources not supported by Kabanero, or if the same actions-after should be taken irrespective of whether the action succeeded, use the `any` attribute to specify the actions to take.
@@ -1805,6 +1807,7 @@ outcome: {{kabanero.job.status}}
 The trigger file is placed in the collection repository at the top level. Other possible locations include:
 - within the collection itself
 - across multiple collection repositories.
+- In a separate repository.
 
 What it means to support merging/override of multiple triggers is TBD.
 
@@ -1822,9 +1825,11 @@ apiVersion: v2
 #### Staging
 
 Stage 0:
-- Create webhook listener
+- Create webhook listener manually
+- Kabanero operator installs Kabanero webhook listener
+- Checking for webhook secret is run-at
 - Create a sample collection with trigger file at top level:
-  - Trigger file will result in running one of the pre-built pipelines in the appsody collection.
+  - Trigger file will select one of two Tekton pipelines in the appsody collection.
 
 
 ### Sample Github Events
